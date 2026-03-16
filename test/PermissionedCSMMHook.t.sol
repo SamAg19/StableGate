@@ -56,12 +56,27 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         // Init pool with the hook attached
         (poolKey,) = initPool(currency0, currency1, IHooks(address(hook)), 3000, SQRT_PRICE_1_1);
 
-        // Seed liquidity so swaps have tokens to trade against
+        // Seed narrow-range liquidity (required for pool state to be valid)
         modifyLiquidityRouter.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e18, salt: 0}),
             ZERO_BYTES
         );
+
+        // Seed full-range liquidity so PoolManager holds enough tokens for CSMM take() calls.
+        // CSMM's beforeSwap calls poolManager.take(input, hook, amount) which is a real ERC20 transfer
+        // from PoolManager to the hook — PoolManager must hold the tokens upfront within the unlock.
+        // With tickSpacing=60, the widest valid range is -887220 to +887220.
+        // 2e22 liquidity at full range deposits ~120e18 tokens of each currency into PoolManager.
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887220, tickUpper: 887220, liquidityDelta: 2e22, salt: 0}),
+            ZERO_BYTES
+        );
+
+        // Seed hook reserves — CSMM swaps are fulfilled directly from the hook's token balances
+        currency0.transfer(address(hook), 1000e18);
+        currency1.transfer(address(hook), 1000e18);
     }
 
     // ─── Step 5: Allowlist management ────────────────────────────────────────
@@ -193,24 +208,91 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         hook.addToAllowlist(institution1);
 
         uint256 bal0Before = currency0.balanceOf(address(this));
+        uint256 bal1Before = currency1.balanceOf(address(this));
 
         bytes memory hookData = abi.encode(institution1);
         swap(poolKey, true, -1e15, hookData);
 
-        // token0 was spent
-        assertLt(currency0.balanceOf(address(this)), bal0Before);
+        // CSMM: spent exactly 1e15 token0, received exactly 1e15 token1
+        assertEq(bal0Before - currency0.balanceOf(address(this)), 1e15);
+        assertEq(currency1.balanceOf(address(this)) - bal1Before, 1e15);
     }
 
     function test_swapReverseDirection() public {
         vm.prank(owner);
         hook.addToAllowlist(institution1);
 
+        uint256 bal0Before = currency0.balanceOf(address(this));
         uint256 bal1Before = currency1.balanceOf(address(this));
 
         bytes memory hookData = abi.encode(institution1);
         swap(poolKey, false, -1e15, hookData);
 
-        // token1 was spent
-        assertLt(currency1.balanceOf(address(this)), bal1Before);
+        // CSMM: spent exactly 1e15 token1, received exactly 1e15 token0
+        assertEq(bal1Before - currency1.balanceOf(address(this)), 1e15);
+        assertEq(currency0.balanceOf(address(this)) - bal0Before, 1e15);
     }
+
+    // ─── Step 8: CSMM pricing tests ──────────────────────────────────────────
+
+    function test_csmmExactInputZeroForOne() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+
+        uint256 bal0Before = currency0.balanceOf(address(this));
+        uint256 bal1Before = currency1.balanceOf(address(this));
+
+        bytes memory hookData = abi.encode(institution1);
+        swap(poolKey, true, -1e18, hookData);
+
+        assertEq(bal0Before - currency0.balanceOf(address(this)), 1e18, "spent exactly 1e18 token0");
+        assertEq(currency1.balanceOf(address(this)) - bal1Before, 1e18, "received exactly 1e18 token1");
+    }
+
+    function test_csmmExactInputOneForZero() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+
+        uint256 bal0Before = currency0.balanceOf(address(this));
+        uint256 bal1Before = currency1.balanceOf(address(this));
+
+        bytes memory hookData = abi.encode(institution1);
+        swap(poolKey, false, -1e18, hookData);
+
+        assertEq(bal1Before - currency1.balanceOf(address(this)), 1e18, "spent exactly 1e18 token1");
+        assertEq(currency0.balanceOf(address(this)) - bal0Before, 1e18, "received exactly 1e18 token0");
+    }
+
+    function test_csmmOneToOneRatio() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+
+        bytes memory hookData = abi.encode(institution1);
+        uint256[3] memory amounts = [uint256(0.1e18), uint256(1e18), uint256(10e18)];
+
+        for (uint256 i = 0; i < 3; i++) {
+            uint256 bal0Before = currency0.balanceOf(address(this));
+            uint256 bal1Before = currency1.balanceOf(address(this));
+
+            swap(poolKey, true, -int256(amounts[i]), hookData);
+
+            assertEq(bal0Before - currency0.balanceOf(address(this)), amounts[i]);
+            assertEq(currency1.balanceOf(address(this)) - bal1Before, amounts[i]);
+        }
+    }
+
+    function test_swapEmitsEvent() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+
+        bytes memory hookData = abi.encode(institution1);
+
+        vm.expectEmit(true, true, false, true, address(hook));
+        emit SwapExecuted(institution1, poolKey.toId(), true, -1e18);
+
+        swap(poolKey, true, -1e18, hookData);
+    }
+
+    // Re-declare SwapExecuted to use with vm.expectEmit
+    event SwapExecuted(address indexed swapper, PoolId indexed poolId, bool zeroForOne, int256 amountSpecified);
 }
