@@ -7,7 +7,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -28,6 +28,7 @@ contract PermissionedCSMMHook is BaseHook {
     error AddZeroAddress();
     error AlreadyAllowlisted(address account);
     error NotAllowlisted(address account);
+    error MissingSwapperHookData();
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
@@ -98,19 +99,64 @@ contract PermissionedCSMMHook is BaseHook {
         return IHooks.beforeAddLiquidity.selector;
     }
 
-    /// @dev Checks allowlist and delegates pricing to the AMM (CSMM added in Step 7).
-    function _beforeSwap(address, PoolKey calldata, SwapParams calldata, bytes calldata hookData)
+    /// @dev Decodes the swapper address from hookData.
+    ///      Supports two encodings:
+    ///      - abi.encode(addr)        → 32 bytes, address in low 20 bytes
+    ///      - abi.encodePacked(addr)  → 20 bytes, address in high 20 bytes of the loaded word
+    function _decodeSwapper(bytes calldata hookData) internal pure returns (address swapper) {
+        if (hookData.length >= 32) {
+            swapper = abi.decode(hookData, (address));
+        } else if (hookData.length == 20) {
+            assembly ("memory-safe") {
+                // Load 32 bytes from the calldata pointer; the address occupies the first 20 bytes.
+                // Shift right by 96 bits (12 bytes) to move it into address position.
+                swapper := shr(96, calldataload(hookData.offset))
+            }
+        } else {
+            revert MissingSwapperHookData();
+        }
+    }
+
+    /// @dev Checks allowlist then executes CSMM (1:1) pricing via the NoOp pattern.
+    ///
+    ///      Token flow:
+    ///        1. Hook takes `amount` of inputCurrency from PoolManager (input was deposited by swapper).
+    ///        2. Hook settles `amount` of outputCurrency into PoolManager (PoolManager forwards to swapper).
+    ///        3. Returns `toBeforeSwapDelta(-amountSpecified, amountSpecified)` to NoOp the AMM curve.
+    ///
+    ///      The hook must hold a reserve of both tokens (seeded via direct ERC20 transfer to this address).
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        // Decode swapper address from hookData; fall back to tx.origin for testing
-        address swapper = hookData.length >= 32 ? abi.decode(hookData, (address)) : tx.origin;
-
+        address swapper = _decodeSwapper(hookData);
         if (!allowlist[swapper]) revert SwapperNotAllowlisted(swapper);
 
-        // Pass-through: return ZERO_DELTA so the AMM handles pricing normally
-        return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        (Currency inputCurrency, Currency outputCurrency) = params.zeroForOne
+            ? (key.currency0, key.currency1)
+            : (key.currency1, key.currency0);
+
+        uint256 amount = params.amountSpecified < 0
+            ? uint256(-params.amountSpecified)
+            : uint256(params.amountSpecified);
+
+        // Pull input tokens from PoolManager into the hook
+        poolManager.take(inputCurrency, address(this), amount);
+
+        // Push output tokens from the hook to PoolManager (sync → transfer → settle)
+        poolManager.sync(outputCurrency);
+        outputCurrency.transfer(address(poolManager), amount);
+        poolManager.settle();
+
+        emit SwapExecuted(swapper, key.toId(), params.zeroForOne, params.amountSpecified);
+
+        // Tell PoolManager the hook fully handled the swap at 1:1 — bypass the AMM curve
+        return (
+            IHooks.beforeSwap.selector,
+            toBeforeSwapDelta(int128(-params.amountSpecified), int128(params.amountSpecified)),
+            0
+        );
     }
 
     // ─── Allowlist Management ─────────────────────────────────────────────────
