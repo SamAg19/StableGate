@@ -1,0 +1,35 @@
+{
+  "lib/forge-std": {
+    "branch": {
+      "name": "v1.2.0",
+      "rev": "eb980e1d4f0e8173ec27da77297ae411840c8ccb"
+    }
+  },
+  "lib/openzeppelin-contracts": {
+    "tag": {
+      "name": "v5.6.1",
+      "rev": "5fd1781b1454fd1ef8e722282f86f9293cacf256"
+    }
+  },
+  "lib/reactive-lib": {
+    "tag": {
+      "name": "v0.2.0",
+      "rev": "d664678a7d86204c9391af4cedfd5ae0b0b904e4"
+    }
+  },
+  "lib/solmate": {
+    "rev": "3998897acb502fa7b480f505138a6ae1842e8d10"
+  },
+  "lib/v4-core": {
+    "tag": {
+      "name": "v4.0.0",
+      "rev": "e50237c43811bd9b526eff40f26772152a42daba"
+    }
+  },
+  "lib/v4-hooks-public": {
+    "rev": "d4f01f4b9a7eacee56385ac41acc59033c81354f"
+  },
+  "lib/v4-periphery": {
+    "rev": "3c31961fb909a2b68d90f0094016cfb8edc68b50"
+  }
+}
