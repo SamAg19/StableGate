@@ -27,7 +27,8 @@ interface IStableGate {
     // ─── Events ──────────────────────────────────────────────────────────────
 
     /// @notice Emitted when an institution's membership tier is updated.
-    event TierUpdated(address indexed institution, Tier tier);
+    /// tier is indexed so the Reactive RSC can read it from topic_2 without decoding data.
+    event TierUpdated(address indexed institution, Tier indexed tier);
 
     /// @notice Emitted when a membership token expires on-chain.
     event MembershipExpiredEvent(address indexed institution, uint256 tokenId);
