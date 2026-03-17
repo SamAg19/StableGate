@@ -1,6 +1,6 @@
 # StableGate
 
-KYC-gated stablecoin swap infrastructure. Institutions earn verified access to a 1:1 CSMM (Constant Sum Market Maker) for USDC/USDT0 on Unichain by minting a MembershipNFT on Base — automatically allowlisted by Reactive Network with zero manual steps.
+KYC-gated stablecoin swap infrastructure. Institutions earn verified access to a CSMM (Constant Sum Market Maker) for USDC/USDT0 on Unichain by minting a tiered MembershipNFT on Base — automatically allowlisted by Reactive Network with zero manual steps. Memberships carry per-tier fees, expiry timestamps, and daily volume caps.
 
 ## Architecture
 
@@ -32,17 +32,29 @@ Base Mainnet                 Reactive Lasna               Unichain Mainnet
 
 | Contract | Description |
 |----------|-------------|
-| `src/MembershipNFT.sol` | ERC721 membership token. Admin mints to grant access. Burned to revoke. |
-| `src/PermissionedCSMMHook.sol` | Uniswap v4 hook with allowlist gate and Constant Sum Market Maker (1:1 pricing). |
-| `src/AllowlistReactiveContract.sol` | Reactive Smart Contract (RSC) deployed on Reactive Lasna. Monitors Base for NFT mints and triggers Unichain callbacks. |
+| `src/interfaces/IStableGate.sol` | Shared `Tier` enum, custom errors, and events used across all contracts. |
+| `src/MembershipNFT.sol` | ERC721 credential. Admin mints with tier (Bronze/Silver/Gold) and expiry. Non-transferable. |
+| `src/PermissionedCSMMHook.sol` | Uniswap v4 hook — allowlist gate, tier-based fees, expiry enforcement, daily volume caps. |
+| `src/AllowlistReactiveContract.sol` | RSC on Reactive Lasna. Monitors Base Transfer + TierUpdated events; auto-allowlists, auto-revokes, and forwards tier to hook. |
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **Permissioned CSMM** | Only allowlisted institutions can swap USDC ↔ USDT0 via the 1:1 constant-sum hook. |
+| **Tiered Fees** | Gold = 0 bps, Silver = 1 bps, Bronze = 3 bps. Applied per-swap from the output amount. |
+| **Membership Expiry** | Tokens carry an expiry timestamp. Expired memberships revert on swap with `MembershipExpired`. |
+| **Daily Volume Caps** | Per-institution and global daily swap limits with block-based rolling window reset. |
+| **Auto-Revocation** | NFT burn or transfer on Base → RSC emits revocation callback → hook removes from allowlist. |
+| **Tier Forwarding** | `TierUpdated` events on Base → RSC emits `setInstitutionTier` callback → hook applies fee tier. |
 
 ## How It Works
 
-1. **Credential issuance (Base):** Admin calls `MembershipNFT.grantMembership(institution)` — mints an ERC721 token.
-2. **Cross-chain detection (Reactive Lasna):** The RSC's `react()` is called by ReactVM when the Transfer event is detected on Base. It emits a `Callback` event targeting the Unichain hook.
-3. **Allowlisting (Unichain):** Reactive Network's callback proxy delivers the callback by calling `hook.addToAllowlistReactive(rvmId, institution)`.
-4. **Gated swap (Unichain):** Institution swaps USDC ↔ USDT0 at 1:1 via the CSMM hook. Non-allowlisted addresses revert.
-5. **Revocation:** Owner calls `hook.removeFromAllowlist(institution)` — immediately blocks future swaps.
+1. **Credential issuance (Base):** Admin calls `MembershipNFT.grantMembershipWithTier(institution, tier)` — mints ERC721 with tier and expiry.
+2. **Cross-chain detection (Reactive Lasna):** RSC's `react()` fires on Transfer (mint → allowlist, burn/transfer → revoke) and TierUpdated (forward tier to hook).
+3. **Allowlisting + Tier (Unichain):** Reactive Network delivers callbacks: `addToAllowlistReactive` and `setInstitutionTier`.
+4. **Gated swap (Unichain):** Institution swaps USDC ↔ USDT0. Hook checks allowlist, expiry, daily cap, applies tier fee, executes CSMM.
+5. **Auto-Revocation:** Burning the NFT on Base automatically removes the institution from the Unichain hook allowlist.
 
 ## Setup
 
@@ -103,11 +115,13 @@ forge test --match-contract ForkDemoTest -vvv
 **What the fork demo proves:**
 
 - Non-allowlisted swap rejected on Unichain
-- MembershipNFT minted on Base fork
-- `RSC.react()` processes the Base Transfer log and emits the Callback event
+- MembershipNFT minted on Base fork; RSC.react() emits Callback
 - Reactive callback delivered to Unichain hook (simulated via `vm.prank(REACTIVE_CALLBACK_PROXY)`)
-- CSMM swap: 10,000 USDC → 10,000 USDT0 at exactly 1:1
-- Reverse swap: 5,000 USDT0 → 5,000 USDC at exactly 1:1
+- Gold tier: 10,000 USDC → 10,000 USDT0 at exactly 1:1 (zero fee)
+- Bronze tier: 10,000 USDC → 9,997 USDT0 (3 bps fee)
+- Reverse swap: 5,000 USDT0 → 5,000 USDC (Gold tier, 1:1)
+- Expired membership reverts with `MembershipExpired`
+- Daily volume cap enforced: second 10k swap blocked at 15k limit
 - Revoked institution blocked from further swaps
 
 ### Run all tests
@@ -116,7 +130,7 @@ forge test --match-contract ForkDemoTest -vvv
 forge test -vvv
 ```
 
-Expected: **38 tests pass** (9 MembershipNFT + 18 hook + 5 RSC + 4 fork + 2 MembershipNFT tests = 38 total).
+Expected: **74 tests pass** (19 MembershipNFT + 35 hook + 12 RSC + 8 fork = 74 total).
 
 ## Deployment
 
@@ -160,8 +174,8 @@ forge script script/DeployReactive.s.sol \
 ### Step 4 — Verify the live cross-chain flow
 
 ```bash
-# Mint NFT on Base Sepolia
-cast send $MEMBERSHIP_NFT "grantMembership(address)" $INSTITUTION \
+# Mint Gold NFT on Base Sepolia
+cast send $MEMBERSHIP_NFT "grantMembershipWithTier(address,uint8)" $INSTITUTION 2 \
   --rpc-url $BASE_SEPOLIA_RPC \
   --private-key $DEPLOYER_PRIVATE_KEY
 
@@ -170,14 +184,18 @@ cast send $MEMBERSHIP_NFT "grantMembership(address)" $INSTITUTION \
 # Check allowlist on Unichain Sepolia
 cast call $HOOK_CONTRACT "isAllowlisted(address)" $INSTITUTION \
   --rpc-url $UNICHAIN_SEPOLIA_RPC
+
+# Check tier (0=Bronze, 1=Silver, 2=Gold)
+cast call $HOOK_CONTRACT "institutionTier(address)" $INSTITUTION \
+  --rpc-url $UNICHAIN_SEPOLIA_RPC
 ```
 
 ## Sponsor Tracks
 
 | Sponsor | Integration |
 |---------|-------------|
-| **Unichain** | Hook deployed on Unichain, USDC/USDT0 pool, mainnet fork tests |
-| **Reactive Network** | Cross-chain NFT-mint → allowlist automation via RSC on Reactive Lasna |
+| **Unichain** | Hook deployed on Unichain, USDC/USDT0 pool, tier-based CSMM fees, mainnet fork tests |
+| **Reactive Network** | Multi-subscription RSC: auto-allowlist on mint, auto-revoke on burn/transfer, tier forwarding on TierUpdated |
 
 ## License
 
