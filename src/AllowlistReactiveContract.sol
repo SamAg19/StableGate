@@ -40,6 +40,10 @@ contract AllowlistReactiveContract is AbstractReactive {
     uint256 public constant TIER_UPDATED_EVENT_TOPIC =
         0x15b3b7a9d17f2a7c5af2eb40b81427fddcf32c98aa6a9b6b5ebe00d42f6daa2b;
 
+    /// @notice keccak256("ExpirySet(address,uint256)") — emitted by MembershipNFT on expiry writes.
+    uint256 public constant EXPIRY_SET_EVENT_TOPIC =
+        uint256(keccak256("ExpirySet(address,uint256)"));
+
     /// @notice topic_1 filter value for mint events: from == address(0) → 32-byte zero.
     uint256 public constant ZERO_TOPIC = 0;
 
@@ -62,6 +66,7 @@ contract AllowlistReactiveContract is AbstractReactive {
     event MintDetected(address indexed recipient, uint256 tokenId, uint256 blockNumber);
     event BurnOrTransferDetected(address indexed from, uint256 tokenId, uint256 blockNumber);
     event TierUpdateDetected(address indexed institution, uint8 tier, uint256 blockNumber);
+    event ExpirySetDetected(address indexed institution, uint256 expiry, uint256 blockNumber);
     event CallbackTriggered(address indexed target, uint256 indexed callbackNumber);
 
     // ─── Constructor ──────────────────────────────────────────────────────────
@@ -95,6 +100,16 @@ contract AllowlistReactiveContract is AbstractReactive {
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
+
+            // Subscription 3: ExpirySet events on MembershipNFT — forward expiry to hook.
+            SERVICE_ADDR.subscribe(
+                BASE_CHAIN_ID,
+                membershipNFT,
+                EXPIRY_SET_EVENT_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
+            );
         }
     }
 
@@ -118,6 +133,8 @@ contract AllowlistReactiveContract is AbstractReactive {
             _handleTransfer(log);
         } else if (log.topic_0 == TIER_UPDATED_EVENT_TOPIC) {
             _handleTierUpdated(log);
+        } else if (log.topic_0 == EXPIRY_SET_EVENT_TOPIC) {
+            _handleExpirySet(log);
         }
     }
 
@@ -189,6 +206,26 @@ contract AllowlistReactiveContract is AbstractReactive {
         emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
     }
 
+    function _handleExpirySet(LogRecord calldata log) internal {
+        // ExpirySet(address indexed institution, uint256 expiry):
+        //   topic_1 = institution (indexed address, padded to 32 bytes)
+        //   data    = expiry (non-indexed uint256)
+        address institution = address(uint160(log.topic_1));
+        uint256 expiry = abi.decode(log.data, (uint256));
+
+        callbackCount++;
+
+        emit ExpirySetDetected(institution, expiry, log.block_number);
+        emit CallbackTriggered(hookContract, callbackCount);
+
+        bytes memory payload = abi.encodeWithSignature(
+            "setInstitutionExpiry(address,uint256)",
+            institution,
+            expiry
+        );
+        emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
+    }
+
     // ─── Admin (RNK only) ─────────────────────────────────────────────────────
 
     /// @notice Pause monitoring by unsubscribing from all Base events.
@@ -209,6 +246,14 @@ contract AllowlistReactiveContract is AbstractReactive {
             REACTIVE_IGNORE,
             REACTIVE_IGNORE
         );
+        SERVICE_ADDR.unsubscribe(
+            BASE_CHAIN_ID,
+            membershipNFT,
+            EXPIRY_SET_EVENT_TOPIC,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE
+        );
     }
 
     /// @notice Resume monitoring by re-subscribing to all Base events.
@@ -225,6 +270,14 @@ contract AllowlistReactiveContract is AbstractReactive {
             BASE_CHAIN_ID,
             membershipNFT,
             TIER_UPDATED_EVENT_TOPIC,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE
+        );
+        SERVICE_ADDR.subscribe(
+            BASE_CHAIN_ID,
+            membershipNFT,
+            EXPIRY_SET_EVENT_TOPIC,
             REACTIVE_IGNORE,
             REACTIVE_IGNORE,
             REACTIVE_IGNORE

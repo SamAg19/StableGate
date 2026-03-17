@@ -335,6 +335,27 @@ contract AllowlistReactiveContractTest is Test {
         });
     }
 
+    function _buildExpirySetLog(address institution, uint256 expiry)
+        internal
+        view
+        returns (IReactive.LogRecord memory)
+    {
+        return IReactive.LogRecord({
+            chain_id: 84532,
+            _contract: MEMBERSHIP_NFT,
+            topic_0: rsc.EXPIRY_SET_EVENT_TOPIC(),
+            topic_1: uint256(uint160(institution)), // indexed institution
+            topic_2: 0,
+            topic_3: 0,
+            data: abi.encode(expiry), // non-indexed uint256
+            block_number: 100,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 0,
+            log_index: 0
+        });
+    }
+
     /// @dev Strip the 4-byte selector from a payload and return the remaining bytes.
     function _stripSelector(bytes memory payload) internal pure returns (bytes memory) {
         bytes memory result = new bytes(payload.length - 4);
@@ -342,5 +363,85 @@ contract AllowlistReactiveContractTest is Test {
             result[i - 4] = payload[i];
         }
         return result;
+    }
+
+    // ─── ExpirySet Forwarding Tests ─────────────────────────────────────────
+
+    function test_expirySetForwardedToHook() public {
+        uint256 expiry = block.timestamp + 365 days;
+        IReactive.LogRecord memory log = _buildExpirySetLog(INSTITUTION, expiry);
+
+        vm.recordLogs();
+        rsc.react(log);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                bytes4 selector = bytes4(payload);
+                if (selector == bytes4(keccak256("setInstitutionExpiry(address,uint256)"))) {
+                    found = true;
+                }
+            }
+        }
+        assertTrue(found, "setInstitutionExpiry callback not emitted");
+    }
+
+    function test_expiryPayloadEncoding() public {
+        uint256 expiry = block.timestamp + 90 days;
+        IReactive.LogRecord memory log = _buildExpirySetLog(INSTITUTION, expiry);
+
+        vm.recordLogs();
+        rsc.react(log);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                bytes4 selector = bytes4(payload);
+                assertEq(
+                    selector,
+                    bytes4(keccak256("setInstitutionExpiry(address,uint256)")),
+                    "selector matches"
+                );
+                (address inst, uint256 exp) = abi.decode(_stripSelector(payload), (address, uint256));
+                assertEq(inst, INSTITUTION, "institution matches");
+                assertEq(exp, expiry, "expiry matches");
+            }
+        }
+    }
+
+    function test_allThreeEventsOnMint() public {
+        // Simulate the three events that fire on a mint with tier + expiry:
+        // 1. Transfer(0 → institution) → addToAllowlistReactive
+        // 2. TierUpdated(institution, Gold) → setInstitutionTier
+        // 3. ExpirySet(institution, expiry) → setInstitutionExpiry
+
+        uint256 expiry = block.timestamp + 365 days;
+
+        vm.recordLogs();
+        rsc.react(_buildMintLog(INSTITUTION, TOKEN_ID));
+        rsc.react(_buildTierUpdatedLog(INSTITUTION, uint8(IStableGate.Tier.Gold)));
+        rsc.react(_buildExpirySetLog(INSTITUTION, expiry));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        assertEq(rsc.callbackCount(), 3, "three callbacks emitted");
+
+        bool addFound;
+        bool tierFound;
+        bool expiryFound;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                bytes4 selector = bytes4(payload);
+                if (selector == bytes4(keccak256("addToAllowlistReactive(address,address)"))) addFound = true;
+                if (selector == bytes4(keccak256("setInstitutionTier(address,uint8)"))) tierFound = true;
+                if (selector == bytes4(keccak256("setInstitutionExpiry(address,uint256)"))) expiryFound = true;
+            }
+        }
+        assertTrue(addFound, "addToAllowlist callback");
+        assertTrue(tierFound, "setInstitutionTier callback");
+        assertTrue(expiryFound, "setInstitutionExpiry callback");
     }
 }
