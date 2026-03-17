@@ -50,6 +50,17 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     uint24 private constant FEE_DENOMINATOR = 1_000_000;
 
+    // ─── Tier-Derived Daily Limits ────────────────────────────────────────────
+
+    /// @notice Gold institutions have no daily cap (unlimited trading).
+    uint256 public constant DAILY_LIMIT_GOLD = 0;
+
+    /// @notice Silver institutions may swap up to 5,000,000 USDC (6-decimal) per day.
+    uint256 public constant DAILY_LIMIT_SILVER = 5_000_000e6;
+
+    /// @notice Bronze institutions may swap up to 1,000,000 USDC (6-decimal) per day.
+    uint256 public constant DAILY_LIMIT_BRONZE = 1_000_000e6;
+
     // ─── State ───────────────────────────────────────────────────────────────
 
     address public owner;
@@ -72,12 +83,6 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     /// @notice Block number of the last volume reset, per institution.
     mapping(address => uint256) public lastResetBlock;
-
-    /// @notice Per-institution daily swap cap (in input token units). 0 = use defaultDailyLimit.
-    mapping(address => uint256) public dailyLimit;
-
-    /// @notice Global daily swap cap applied when no per-institution limit is set. 0 = no cap.
-    uint256 public defaultDailyLimit;
 
     /// @notice Number of blocks that constitute one "day". Default: 7200 (~24 h on Unichain).
     uint256 public blocksPerDay = 7200;
@@ -201,6 +206,12 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     // ─── Internal Helpers ─────────────────────────────────────────────────────
 
+    function _dailyLimitForTier(Tier tier) internal pure returns (uint256) {
+        if (tier == Tier.Gold) return DAILY_LIMIT_GOLD;
+        if (tier == Tier.Silver) return DAILY_LIMIT_SILVER;
+        return DAILY_LIMIT_BRONZE;
+    }
+
     function _tierFee(Tier tier) internal pure returns (uint24) {
         if (tier == Tier.Gold) return FEE_GOLD;
         if (tier == Tier.Silver) return FEE_SILVER;
@@ -215,7 +226,7 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
             emit DailyVolumeReset(swapper, block.number);
         }
 
-        uint256 effective = dailyLimit[swapper] != 0 ? dailyLimit[swapper] : defaultDailyLimit;
+        uint256 effective = _dailyLimitForTier(institutionTier[swapper]);
         if (effective > 0 && dailyVolume[swapper] + absAmount > effective) {
             revert DailyLimitExceeded(swapper, effective, absAmount);
         }
@@ -292,14 +303,6 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     }
 
     // ─── Daily Limit Management ───────────────────────────────────────────────
-
-    function setDailyLimit(address institution, uint256 limit) external onlyOwner {
-        dailyLimit[institution] = limit;
-    }
-
-    function setDefaultDailyLimit(uint256 limit) external onlyOwner {
-        defaultDailyLimit = limit;
-    }
 
     function setBlocksPerDay(uint256 blocks) external onlyOwner {
         blocksPerDay = blocks;

@@ -373,22 +373,22 @@ contract ForkDemoTest is Test {
         console2.log("[ok] Expired membership correctly blocked");
     }
 
-    /// @notice Daily volume limit: first 10_000e6 passes, second 10_000e6 hits 15_000e6 cap.
+    /// @notice Bronze tier daily limit: first 600k passes, second 600k hits the 1M cap.
     function test_dailyLimitEnforced() public {
         vm.selectFork(unichainForkId);
         vm.prank(REACTIVE_CALLBACK_PROXY);
         hook.addToAllowlistReactive(address(0), institution);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
-        vm.prank(owner);
-        hook.setDailyLimit(institution, 15_000e6);
+        // Bronze is the default tier — DAILY_LIMIT_BRONZE = 1_000_000e6
 
-        _swapUsdcIn(institution, 10_000e6); // succeeds — 10k < 15k cap
+        _swapUsdcIn(institution, 600_000e6); // succeeds — 600k < 1M cap
 
         _expectHookRevert(abi.encodeWithSelector(
-            IStableGate.DailyLimitExceeded.selector, institution, uint256(15_000e6), uint256(10_000e6)
+            IStableGate.DailyLimitExceeded.selector,
+            institution,
+            hook.DAILY_LIMIT_BRONZE(),
+            uint256(600_000e6)
         ));
-        _swapUsdcIn(institution, 10_000e6); // reverts — 20k > 15k cap
-        console2.log("[ok] Daily limit enforced: second 10k swap blocked at 15k cap");
+        _swapUsdcIn(institution, 600_000e6); // reverts — cumulative 1.2M > 1M cap
+        console2.log("[ok] Bronze daily limit enforced: second 600k swap blocked at 1M cap");
     }
 }
