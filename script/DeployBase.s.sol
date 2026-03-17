@@ -14,6 +14,9 @@ import {MembershipNFT} from "../src/MembershipNFT.sol";
 ///     --private-key $DEPLOYER_PRIVATE_KEY \
 ///     -vvv
 contract DeployBase is Script {
+    /// @dev Default membership validity: 365 days. Override by calling setDefaultExpiryDuration post-deploy.
+    uint256 constant DEFAULT_EXPIRY_DURATION = 365 days;
+
     function run() external {
         address deployer = vm.envAddress("DEPLOYER_ADDRESS");
 
@@ -21,11 +24,15 @@ contract DeployBase is Script {
 
         MembershipNFT nft = new MembershipNFT(deployer);
 
+        // Configure default expiry so new memberships expire after 1 year by default.
+        nft.setDefaultExpiryDuration(DEFAULT_EXPIRY_DURATION);
+
         vm.stopBroadcast();
 
         console2.log("=== Base Sepolia Deployment ===");
-        console2.log("MembershipNFT:", address(nft));
-        console2.log("Admin:        ", deployer);
+        console2.log("MembershipNFT:          ", address(nft));
+        console2.log("Admin:                  ", deployer);
+        console2.log("DefaultExpiryDuration:  ", DEFAULT_EXPIRY_DURATION, "seconds (365 days)");
         console2.log("");
         console2.log("Set in .env:");
         console2.log("  MEMBERSHIP_NFT=", address(nft));
