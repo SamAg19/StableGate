@@ -30,6 +30,9 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     error AlreadyAllowlisted(address account);
     error NotAllowlisted(address account);
     error MissingSwapperHookData();
+    error ZeroFees();
+    error ZeroAddress();
+    error InvalidSplitBps();
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
@@ -38,6 +41,10 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     event SwapExecuted(address indexed swapper, PoolId indexed poolId, bool zeroForOne, int256 amountSpecified);
     /// @notice Emitted when all institution-specific state is wiped on revocation.
     event InstitutionStateCleared(address indexed institution);
+    event FeesWithdrawn(address indexed recipient, address indexed currency, uint256 amount);
+    event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
+    event LpFeeSplitUpdated(uint256 oldSplitBps, uint256 newSplitBps);
+    event FeesDistributed(address indexed currency, uint256 lpAmount, uint256 operatorAmount);
 
     // ─── Fee Constants ────────────────────────────────────────────────────────
 
@@ -62,6 +69,19 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     /// @notice Bronze institutions may swap up to 1,000,000 USDC (6-decimal) per day.
     uint256 public constant DAILY_LIMIT_BRONZE = 1_000_000e6;
+
+    // ─── Fee Split ──────────────────────────────────────────────────────────
+
+    /// @notice Recipient of operator's share of swap fees.
+    address public feeRecipient;
+
+    /// @notice Accrued operator fee share per currency, withdrawable via withdrawFees().
+    mapping(address => uint256) public accruedFees;
+
+    /// @notice LP share of swap fees in bps (out of 10000). Default 50%.
+    uint256 public lpFeeSplitBps = 5000;
+
+    uint256 public constant MAX_LP_SPLIT_BPS = 10000;
 
     // ─── State ───────────────────────────────────────────────────────────────
 
@@ -103,9 +123,13 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     // ─── Constructor ──────────────────────────────────────────────────────────
 
-    constructor(IPoolManager _poolManager, address _reactiveCallbackProxy) BaseHook(_poolManager) {
+    constructor(IPoolManager _poolManager, address _reactiveCallbackProxy, address _feeRecipient)
+        BaseHook(_poolManager)
+    {
+        if (_feeRecipient == address(0)) revert ZeroAddress();
         owner = msg.sender;
         reactiveCallbackProxy = _reactiveCallbackProxy;
+        feeRecipient = _feeRecipient;
     }
 
     // ─── Hook Permissions ─────────────────────────────────────────────────────
@@ -188,9 +212,34 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
         // Pull full input from PoolManager into the hook
         poolManager.take(inputCurrency, address(this), absAmount);
 
-        // Push net output from hook to PoolManager (fee stays in hook as revenue)
+        // 5. Fee split: LP share via donate(), operator share accrued for withdrawal
+        uint256 lpAmount;
+        if (feeAmount > 0) {
+            lpAmount = (feeAmount * lpFeeSplitBps) / 10000;
+            uint256 operatorAmount = feeAmount - lpAmount;
+
+            if (operatorAmount > 0) {
+                accruedFees[Currency.unwrap(outputCurrency)] += operatorAmount;
+            }
+
+            // Return LP share to pool via donate() — distributes proportionally to in-range LPs.
+            // donate() creates a debit on the hook which the subsequent settle() covers.
+            if (lpAmount > 0) {
+                poolManager.donate(
+                    key,
+                    outputCurrency == key.currency0 ? lpAmount : 0,
+                    outputCurrency == key.currency1 ? lpAmount : 0,
+                    ""
+                );
+            }
+
+            emit FeesDistributed(Currency.unwrap(outputCurrency), lpAmount, operatorAmount);
+        }
+
+        // Push net output + LP donation from hook to PoolManager.
+        // outputAmount settles the swap; lpAmount settles the donate() debit.
         poolManager.sync(outputCurrency);
-        outputCurrency.transfer(address(poolManager), outputAmount);
+        outputCurrency.transfer(address(poolManager), outputAmount + lpAmount);
         poolManager.settle();
 
         emit SwapExecuted(swapper, key.toId(), params.zeroForOne, params.amountSpecified);
@@ -317,6 +366,30 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     function setBlocksPerDay(uint256 blocks) external onlyOwner {
         blocksPerDay = blocks;
+    }
+
+    // ─── Fee Management ────────────────────────────────────────────────────
+
+    function withdrawFees(address currency) external onlyOwner {
+        uint256 amount = accruedFees[currency];
+        if (amount == 0) revert ZeroFees();
+
+        accruedFees[currency] = 0;
+        Currency.wrap(currency).transfer(feeRecipient, amount);
+
+        emit FeesWithdrawn(feeRecipient, currency, amount);
+    }
+
+    function setFeeRecipient(address recipient) external onlyOwner {
+        if (recipient == address(0)) revert ZeroAddress();
+        emit FeeRecipientUpdated(feeRecipient, recipient);
+        feeRecipient = recipient;
+    }
+
+    function setLpFeeSplitBps(uint256 splitBps) external onlyOwner {
+        if (splitBps > MAX_LP_SPLIT_BPS) revert InvalidSplitBps();
+        emit LpFeeSplitUpdated(lpFeeSplitBps, splitBps);
+        lpFeeSplitBps = splitBps;
     }
 
     // ─── Admin Functions ──────────────────────────────────────────────────────
