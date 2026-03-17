@@ -52,11 +52,6 @@ contract PermissionedCSMMHook is BaseHook {
         _;
     }
 
-    modifier onlyOwnerOrReactive() {
-        if (msg.sender != owner && msg.sender != reactiveCallbackProxy) revert NotOwnerOrReactive();
-        _;
-    }
-
     // ─── Constructor ──────────────────────────────────────────────────────────
 
     constructor(IPoolManager _poolManager, address _reactiveCallbackProxy) BaseHook(_poolManager) {
@@ -161,8 +156,29 @@ contract PermissionedCSMMHook is BaseHook {
 
     // ─── Allowlist Management ─────────────────────────────────────────────────
 
-    /// @notice Add an address to the allowlist. Called by owner or Reactive callback proxy.
-    function addToAllowlist(address account) external onlyOwnerOrReactive {
+    /// @notice Manually add an address to the allowlist. Owner only.
+    ///         For Reactive Network callbacks, use addToAllowlistReactive() instead.
+    function addToAllowlist(address account) external onlyOwner {
+        _addToAllowlist(account);
+    }
+
+    /// @notice Called by the Reactive Network Callback Proxy after an RSC emits a Callback.
+    ///         Reactive Network automatically overwrites the first argument of every callback
+    ///         payload with the deployer's RVM ID address. This two-argument variant accepts
+    ///         that injected value as `rvmId` (ignored here — msg.sender check is sufficient)
+    ///         and the actual institution address as `account`.
+    /// @param  rvmId    Injected by Reactive Network — the RSC deployer's address (unused).
+    /// @param  account  The institution address to allowlist.
+    function addToAllowlistReactive(address rvmId, address account) external {
+        if (msg.sender != reactiveCallbackProxy) revert NotOwnerOrReactive();
+        // rvmId can be used for additional verification (e.g., require(rvmId == authorizedRsc))
+        // but is intentionally not checked here — msg.sender against the proxy is sufficient.
+        (rvmId); // silence unused-variable warning
+        _addToAllowlist(account);
+    }
+
+    /// @dev Shared logic for adding an account to the allowlist.
+    function _addToAllowlist(address account) internal {
         if (account == address(0)) revert AddZeroAddress();
         if (allowlist[account]) revert AlreadyAllowlisted(account);
 

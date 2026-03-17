@@ -88,16 +88,24 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         assertEq(hook.allowlistCount(), 1);
     }
 
-    function test_reactiveProxyCanAddToAllowlist() public {
+    function test_reactiveProxyCanAddViaReactiveFunction() public {
+        // Reactive Network delivers callbacks via addToAllowlistReactive(rvmId, account).
+        // The proxy calls the two-arg variant; address(0) is the RVM ID placeholder.
         vm.prank(reactiveProxy);
-        hook.addToAllowlist(institution1);
+        hook.addToAllowlistReactive(address(0), institution1);
         assertTrue(hook.isAllowlisted(institution1));
     }
 
     function test_revert_unauthorizedCannotAdd() public {
         vm.prank(unauthorized);
-        vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
+        vm.expectRevert(PermissionedCSMMHook.NotOwner.selector);
         hook.addToAllowlist(institution1);
+    }
+
+    function test_revert_nonProxyCannotCallReactiveFunction() public {
+        vm.prank(unauthorized);
+        vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
+        hook.addToAllowlistReactive(address(0), institution1);
     }
 
     function test_revert_cannotAddZeroAddress() public {
@@ -154,14 +162,14 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         hook.setReactiveCallbackProxy(newProxy);
         assertEq(hook.reactiveCallbackProxy(), newProxy);
 
-        // Old proxy should now be rejected
+        // Old proxy should now be rejected on the reactive path
         vm.prank(reactiveProxy);
         vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
-        hook.addToAllowlist(institution1);
+        hook.addToAllowlistReactive(address(0), institution1);
 
-        // New proxy is accepted
+        // New proxy is accepted on the reactive path
         vm.prank(newProxy);
-        hook.addToAllowlist(institution1);
+        hook.addToAllowlistReactive(address(0), institution1);
         assertTrue(hook.isAllowlisted(institution1));
     }
 
