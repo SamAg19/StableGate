@@ -189,10 +189,12 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
         emit SwapExecuted(swapper, key.toId(), params.zeroForOne, params.amountSpecified);
 
         // NoOp: tell PoolManager the hook fully handled the swap.
-        // We consumed `absAmount` input and produced `outputAmount` output.
+        // deltaSpecified  = +absAmount  → hook absorbed the full input from PM
+        // deltaUnspecified = -outputAmount → hook deposited outputAmount of output into PM
+        // (negative = hook owes PM, which PM forwards to the swapper)
         return (
             IHooks.beforeSwap.selector,
-            toBeforeSwapDelta(int128(-params.amountSpecified), int128(int256(outputAmount))),
+            toBeforeSwapDelta(int128(-params.amountSpecified), -int128(int256(outputAmount))),
             0
         );
     }

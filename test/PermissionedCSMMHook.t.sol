@@ -15,6 +15,7 @@ import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {HookMiner} from "v4-hooks-public/utils/HookMiner.sol";
 
 import {PermissionedCSMMHook} from "../src/PermissionedCSMMHook.sol";
+import {IStableGate} from "../src/interfaces/IStableGate.sol";
 
 contract PermissionedCSMMHookTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -74,9 +75,15 @@ contract PermissionedCSMMHookTest is Test, Deployers {
             ZERO_BYTES
         );
 
-        // Seed hook reserves — CSMM swaps are fulfilled directly from the hook's token balances
-        currency0.transfer(address(hook), 1000e18);
-        currency1.transfer(address(hook), 1000e18);
+        // Seed hook reserves — CSMM swaps are fulfilled directly from the hook's token balances.
+        // Use 100_000e18 so tier fee tests with 10_000e18 swap amounts have plenty of headroom.
+        currency0.transfer(address(hook), 100_000e18);
+        currency1.transfer(address(hook), 100_000e18);
+
+        // Pre-set institution1 to Gold tier so all existing 1:1 swap assertions continue to pass.
+        // New tier tests explicitly set the tier they need (Silver / Bronze / Gold).
+        vm.prank(owner);
+        hook.setInstitutionTier(institution1, IStableGate.Tier.Gold);
     }
 
     // ─── Step 5: Allowlist management ────────────────────────────────────────
@@ -303,4 +310,143 @@ contract PermissionedCSMMHookTest is Test, Deployers {
 
     // Re-declare SwapExecuted to use with vm.expectEmit
     event SwapExecuted(address indexed swapper, PoolId indexed poolId, bool zeroForOne, int256 amountSpecified);
+    event TierUpdated(address indexed institution, IStableGate.Tier tier);
+
+    // ─── Step 20: Tier-Based Fee & Expiry Tests ───────────────────────────────
+
+    function test_goldTierZeroFee() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        // institution1 is already set to Gold in setUp
+
+        uint256 amount = 10_000e18;
+        uint256 bal0Before = currency0.balanceOf(address(this));
+        uint256 bal1Before = currency1.balanceOf(address(this));
+
+        bytes memory hookData = abi.encode(institution1);
+        swap(poolKey, true, -int256(amount), hookData);
+
+        // Gold = 0 fee: output == input exactly
+        assertEq(bal0Before - currency0.balanceOf(address(this)), amount, "spent exact amount");
+        assertEq(currency1.balanceOf(address(this)) - bal1Before, amount, "received exact amount");
+    }
+
+    function test_silverTierFee() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Silver);
+
+        // 1 bps = 100 ppm. For 10_000e18: fee = 10_000e18 * 100 / 1_000_000 = 1e18
+        uint256 amount = 10_000e18;
+        uint256 expectedFee = amount * 100 / 1_000_000;
+        uint256 expectedOut = amount - expectedFee;
+
+        uint256 bal0Before = currency0.balanceOf(address(this));
+        uint256 bal1Before = currency1.balanceOf(address(this));
+
+        swap(poolKey, true, -int256(amount), abi.encode(institution2));
+
+        assertEq(bal0Before - currency0.balanceOf(address(this)), amount, "spent exact input");
+        assertEq(currency1.balanceOf(address(this)) - bal1Before, expectedOut, "silver fee deducted");
+    }
+
+    function test_bronzeTierFee() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+
+        // 3 bps = 300 ppm. For 10_000e18: fee = 10_000e18 * 300 / 1_000_000 = 3e18
+        uint256 amount = 10_000e18;
+        uint256 expectedFee = amount * 300 / 1_000_000;
+        uint256 expectedOut = amount - expectedFee;
+
+        uint256 bal1Before = currency1.balanceOf(address(this));
+
+        swap(poolKey, true, -int256(amount), abi.encode(institution2));
+
+        assertEq(currency1.balanceOf(address(this)) - bal1Before, expectedOut, "bronze fee deducted");
+    }
+
+    function test_revert_expiredMembership() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setInstitutionExpiry(institution1, block.timestamp + 30 days);
+
+        vm.warp(block.timestamp + 30 days + 1);
+
+        bytes memory innerError = abi.encodeWithSelector(
+            IStableGate.MembershipExpired.selector,
+            institution1
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeSwap.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+        swap(poolKey, true, -1e18, abi.encode(institution1));
+    }
+
+    function test_notExpiredBeforeDeadline() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setInstitutionExpiry(institution1, block.timestamp + 30 days);
+
+        vm.warp(block.timestamp + 30 days - 1);
+
+        uint256 bal1Before = currency1.balanceOf(address(this));
+        swap(poolKey, true, -1e18, abi.encode(institution1));
+        // Gold tier: 1:1 swap should succeed
+        assertEq(currency1.balanceOf(address(this)) - bal1Before, 1e18);
+    }
+
+    function test_setTierByOwner() public {
+        vm.prank(owner);
+        hook.setInstitutionTier(institution1, IStableGate.Tier.Silver);
+        assertEq(uint8(hook.institutionTier(institution1)), uint8(IStableGate.Tier.Silver));
+    }
+
+    function test_setTierByProxy() public {
+        vm.prank(reactiveProxy);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
+        assertEq(uint8(hook.institutionTier(institution2)), uint8(IStableGate.Tier.Gold));
+    }
+
+    function test_revert_setTierUnauthorized() public {
+        vm.prank(unauthorized);
+        vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
+        hook.setInstitutionTier(institution1, IStableGate.Tier.Gold);
+    }
+
+    function test_tierUpgradeAffectsFee() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+
+        uint256 amount = 10_000e18;
+        uint256 bronzeOut = amount - (amount * 300 / 1_000_000);
+
+        uint256 bal1Before = currency1.balanceOf(address(this));
+        swap(poolKey, true, -int256(amount), abi.encode(institution2));
+        uint256 bronzeReceived = currency1.balanceOf(address(this)) - bal1Before;
+        assertEq(bronzeReceived, bronzeOut, "bronze fee applied");
+
+        // Upgrade to Gold
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
+
+        uint256 bal1Before2 = currency1.balanceOf(address(this));
+        swap(poolKey, true, -int256(amount), abi.encode(institution2));
+        uint256 goldReceived = currency1.balanceOf(address(this)) - bal1Before2;
+        assertEq(goldReceived, amount, "gold zero fee after upgrade");
+        assertTrue(goldReceived > bronzeReceived, "gold output > bronze output");
+    }
 }
