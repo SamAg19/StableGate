@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {MembershipNFT} from "../src/MembershipNFT.sol";
+import {IStableGate} from "../src/interfaces/IStableGate.sol";
 
 contract MembershipNFTTest is Test {
     MembershipNFT nft;
@@ -11,6 +12,9 @@ contract MembershipNFTTest is Test {
     address institution1 = makeAddr("institution1");
     address institution2 = makeAddr("institution2");
     address nonAdmin = makeAddr("nonAdmin");
+
+    // Re-declare for vm.expectEmit
+    event TierUpdated(address indexed institution, IStableGate.Tier tier);
 
     function setUp() public {
         nft = new MembershipNFT(admin);
@@ -108,4 +112,109 @@ contract MembershipNFTTest is Test {
 
     // Declare the ERC721 Transfer event for expectEmit
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+
+    // ─── Step 18: Tier & Expiry Tests ─────────────────────────────────────────
+
+    function test_defaultTierIsBronze() public {
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+        assertEq(uint8(nft.tokenTier(tokenId)), uint8(IStableGate.Tier.Bronze));
+        assertEq(uint8(nft.getTier(institution1)), uint8(IStableGate.Tier.Bronze));
+    }
+
+    function test_grantWithTier() public {
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembershipWithTier(institution1, IStableGate.Tier.Gold);
+        assertEq(uint8(nft.tokenTier(tokenId)), uint8(IStableGate.Tier.Gold));
+        assertEq(uint8(nft.getTier(institution1)), uint8(IStableGate.Tier.Gold));
+    }
+
+    function test_setTier() public {
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+
+        vm.expectEmit(true, false, false, true, address(nft));
+        emit TierUpdated(institution1, IStableGate.Tier.Gold);
+
+        vm.prank(admin);
+        nft.setTier(tokenId, IStableGate.Tier.Gold);
+
+        assertEq(uint8(nft.tokenTier(tokenId)), uint8(IStableGate.Tier.Gold));
+    }
+
+    function test_revert_setTierNonAdmin() public {
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+
+        vm.prank(nonAdmin);
+        vm.expectRevert(MembershipNFT.NotAdmin.selector);
+        nft.setTier(tokenId, IStableGate.Tier.Gold);
+    }
+
+    function test_expirySetOnMint() public {
+        vm.prank(admin);
+        nft.setDefaultExpiryDuration(365 days);
+
+        vm.warp(1000);
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+
+        assertEq(nft.tokenExpiry(tokenId), 1000 + 365 days);
+    }
+
+    function test_isExpiredFalseWhenFresh() public {
+        vm.prank(admin);
+        nft.setDefaultExpiryDuration(365 days);
+
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+
+        assertFalse(nft.isExpired(tokenId));
+    }
+
+    function test_isExpiredTrueAfterWarp() public {
+        vm.prank(admin);
+        nft.setDefaultExpiryDuration(365 days);
+
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+
+        vm.warp(block.timestamp + 365 days + 1);
+        assertTrue(nft.isExpired(tokenId));
+    }
+
+    function test_setExpiry() public {
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+
+        // no expiry by default (defaultExpiryDuration == 0)
+        assertFalse(nft.isExpired(tokenId));
+
+        vm.prank(admin);
+        nft.setExpiry(tokenId, block.timestamp + 1 days);
+
+        assertFalse(nft.isExpired(tokenId));
+
+        vm.warp(block.timestamp + 2 days);
+        assertTrue(nft.isExpired(tokenId));
+    }
+
+    function test_revert_transferBlocked() public {
+        vm.prank(admin);
+        nft.grantMembership(institution1);
+
+        vm.prank(institution1);
+        vm.expectRevert(MembershipNFT.TransferRestricted.selector);
+        nft.transferFrom(institution1, institution2, 1);
+    }
+
+    function test_burnStillWorks() public {
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+
+        vm.prank(admin);
+        nft.revokeMembership(tokenId);
+
+        assertFalse(nft.isMember(institution1));
+    }
 }
