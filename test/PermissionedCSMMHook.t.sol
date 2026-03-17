@@ -449,4 +449,170 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         assertEq(goldReceived, amount, "gold zero fee after upgrade");
         assertTrue(goldReceived > bronzeReceived, "gold output > bronze output");
     }
+
+    // ─── Step 22: Daily Volume Limit Tests ────────────────────────────────────
+
+    function test_noCapByDefault() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+
+        // No limit set — large swap should succeed
+        swap(poolKey, true, -10_000e18, abi.encode(institution1));
+    }
+
+    function test_swapUnderLimit() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setDailyLimit(institution1, 20_000e18);
+
+        uint256 bal1Before = currency1.balanceOf(address(this));
+        swap(poolKey, true, -10_000e18, abi.encode(institution1));
+        assertEq(currency1.balanceOf(address(this)) - bal1Before, 10_000e18);
+    }
+
+    function test_revert_swapOverLimit() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setDailyLimit(institution1, 5_000e18);
+
+        bytes memory innerError = abi.encodeWithSelector(
+            IStableGate.DailyLimitExceeded.selector,
+            institution1,
+            uint256(5_000e18),
+            uint256(10_000e18)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeSwap.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+        swap(poolKey, true, -10_000e18, abi.encode(institution1));
+    }
+
+    function test_cumulativeVolumeTracked() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setDailyLimit(institution1, 10_000e18);
+
+        // First swap of 6_000e18 succeeds
+        swap(poolKey, true, -6_000e18, abi.encode(institution1));
+
+        // Second swap of 6_000e18 would total 12_000e18 > 10_000e18 limit — reverts
+        bytes memory innerError = abi.encodeWithSelector(
+            IStableGate.DailyLimitExceeded.selector,
+            institution1,
+            uint256(10_000e18),
+            uint256(6_000e18)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeSwap.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+        swap(poolKey, true, -6_000e18, abi.encode(institution1));
+    }
+
+    function test_resetAfterBlockWindow() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setDailyLimit(institution1, 10_000e18);
+
+        // First swap fills limit
+        swap(poolKey, true, -10_000e18, abi.encode(institution1));
+
+        // Advance past the block window
+        vm.roll(block.number + hook.blocksPerDay() + 1);
+
+        // Volume counter resets — previously blocked swap now succeeds
+        swap(poolKey, true, -10_000e18, abi.encode(institution1));
+    }
+
+    function test_perInstitutionLimit() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
+
+        vm.prank(owner);
+        hook.setDailyLimit(institution1, 5_000e18);  // low cap
+        vm.prank(owner);
+        hook.setDailyLimit(institution2, 50_000e18); // high cap
+
+        // institution2 can swap large amounts
+        swap(poolKey, true, -20_000e18, abi.encode(institution2));
+
+        // institution1 is blocked at its lower cap
+        bytes memory innerError = abi.encodeWithSelector(
+            IStableGate.DailyLimitExceeded.selector,
+            institution1,
+            uint256(5_000e18),
+            uint256(10_000e18)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeSwap.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+        swap(poolKey, true, -10_000e18, abi.encode(institution1));
+    }
+
+    function test_defaultLimitApplied() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setDefaultDailyLimit(8_000e18);
+
+        // Swap under default limit succeeds
+        swap(poolKey, true, -8_000e18, abi.encode(institution1));
+
+        // Next swap would exceed it
+        bytes memory innerError = abi.encodeWithSelector(
+            IStableGate.DailyLimitExceeded.selector,
+            institution1,
+            uint256(8_000e18),
+            uint256(1e18)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeSwap.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+        swap(poolKey, true, -1e18, abi.encode(institution1));
+    }
+
+    function test_specificLimitOverridesDefault() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setDefaultDailyLimit(5_000e18);
+
+        // Override with higher institution-specific limit
+        vm.prank(owner);
+        hook.setDailyLimit(institution1, 20_000e18);
+
+        // Swap beyond default limit but within specific limit — succeeds
+        swap(poolKey, true, -15_000e18, abi.encode(institution1));
+    }
 }
