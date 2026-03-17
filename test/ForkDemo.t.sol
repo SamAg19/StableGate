@@ -20,6 +20,7 @@ import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {PermissionedCSMMHook} from "../src/PermissionedCSMMHook.sol";
 import {MembershipNFT} from "../src/MembershipNFT.sol";
 import {AllowlistReactiveContract} from "../src/AllowlistReactiveContract.sol";
+import {IStableGate} from "../src/interfaces/IStableGate.sol";
 
 /// @title ForkDemoTest
 /// @notice Multi-chain integration test / demo. Forks both Base mainnet and Unichain mainnet,
@@ -180,31 +181,10 @@ contract ForkDemoTest is Test {
     /// @notice Step 1: Non-allowlisted addresses are rejected before any token movement.
     function test_nonAllowlistedSwapReverts() public {
         vm.selectFork(unichainForkId);
-
-        bytes memory innerError =
-            abi.encodeWithSelector(PermissionedCSMMHook.SwapperNotAllowlisted.selector, institution);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                CustomRevert.WrappedError.selector,
-                address(hook),
-                IHooks.beforeSwap.selector,
-                innerError,
-                abi.encodePacked(Hooks.HookCallFailed.selector)
-            )
+        _expectHookRevert(
+            abi.encodeWithSelector(PermissionedCSMMHook.SwapperNotAllowlisted.selector, institution)
         );
-
-        swapRouter.swap(
-            poolKey,
-            SwapParams({
-                zeroForOne:        zeroForOneIsUsdcIn,
-                amountSpecified:   -10_000e6,
-                sqrtPriceLimitX96: zeroForOneIsUsdcIn ? MIN_PRICE_LIMIT : MAX_PRICE_LIMIT
-            }),
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            abi.encode(institution)
-        );
-
+        _swapUsdcIn(institution, 10_000e6);
         console2.log("[ok] Non-allowlisted swap correctly rejected");
     }
 
@@ -243,7 +223,7 @@ contract ForkDemoTest is Test {
         emit AllowlistReactiveContract.MintDetected(institution, tokenId, 1);
 
         vm.expectEmit(true, true, false, false, address(rsc));
-        emit AllowlistReactiveContract.CallbackTriggered(institution, 1);
+        emit AllowlistReactiveContract.CallbackTriggered(address(hook), 1);
 
         rsc.react(log);
         assertEq(rsc.callbackCount(), 1);
@@ -257,42 +237,31 @@ contract ForkDemoTest is Test {
         assertTrue(hook.isAllowlisted(institution));
         console2.log("[ok] Reactive callback delivered: institution allowlisted on Unichain");
 
+        // Set Gold tier so this base-flow test verifies 1:1 ratio (fee-testing is in separate tests)
+        vm.prank(owner);
+        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
+
         // Step 5 — Execute CSMM swap on Unichain — 10,000 USDC → USDT0
-        uint256 usdcBefore  = IERC20(USDC).balanceOf(address(this));
         uint256 usdt0Before = IERC20(USDT0).balanceOf(address(this));
+        uint256 usdcBefore  = IERC20(USDC).balanceOf(address(this));
+        _swapUsdcIn(institution, 10_000e6);
 
-        swapRouter.swap(
-            poolKey,
-            SwapParams({
-                zeroForOne:        zeroForOneIsUsdcIn,
-                amountSpecified:   -10_000e6,
-                sqrtPriceLimitX96: zeroForOneIsUsdcIn ? MIN_PRICE_LIMIT : MAX_PRICE_LIMIT
-            }),
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            abi.encode(institution)
-        );
-
-        uint256 usdcSpent     = usdcBefore  - IERC20(USDC).balanceOf(address(this));
-        uint256 usdt0Received = IERC20(USDT0).balanceOf(address(this)) - usdt0Before;
-
-        assertEq(usdcSpent,     10_000e6, "USDC spent");
-        assertEq(usdt0Received, 10_000e6, "USDT0 received");
-
-        console2.log("[ok] CSMM swap: 10,000 USDC -> 10,000 USDT0 (1:1)");
-        console2.log("     USDC spent:     ", usdcSpent);
-        console2.log("     USDT0 received: ", usdt0Received);
+        assertEq(usdcBefore  - IERC20(USDC).balanceOf(address(this)),  10_000e6, "USDC spent");
+        assertEq(IERC20(USDT0).balanceOf(address(this)) - usdt0Before, 10_000e6, "USDT0 received");
+        console2.log("[ok] CSMM swap: 10,000 USDC -> 10,000 USDT0 (Gold tier, 1:1)");
     }
 
-    /// @notice Step 6: Reverse direction — USDT0 → USDC still 1:1.
+    /// @notice Step 6: Reverse direction — USDT0 → USDC still 1:1 for Gold tier.
     function test_reverseSwap() public {
         vm.selectFork(unichainForkId);
         vm.prank(REACTIVE_CALLBACK_PROXY);
         hook.addToAllowlistReactive(address(0), institution);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
 
         uint256 usdcBefore  = IERC20(USDC).balanceOf(address(this));
         uint256 usdt0Before = IERC20(USDT0).balanceOf(address(this));
-
-        bool reverseDir = !zeroForOneIsUsdcIn; // swap USDT0 in
+        bool reverseDir = !zeroForOneIsUsdcIn;
 
         swapRouter.swap(
             poolKey,
@@ -305,15 +274,9 @@ contract ForkDemoTest is Test {
             abi.encode(institution)
         );
 
-        uint256 usdt0Spent   = usdt0Before - IERC20(USDT0).balanceOf(address(this));
-        uint256 usdcReceived = IERC20(USDC).balanceOf(address(this)) - usdcBefore;
-
-        assertEq(usdt0Spent,   5_000e6, "USDT0 spent");
-        assertEq(usdcReceived, 5_000e6, "USDC received");
-
-        console2.log("[ok] Reverse CSMM swap: 5,000 USDT0 -> 5,000 USDC (1:1)");
-        console2.log("     USDT0 spent:    ", usdt0Spent);
-        console2.log("     USDC received:  ", usdcReceived);
+        assertEq(usdt0Before - IERC20(USDT0).balanceOf(address(this)), 5_000e6, "USDT0 spent");
+        assertEq(IERC20(USDC).balanceOf(address(this)) - usdcBefore,   5_000e6, "USDC received");
+        console2.log("[ok] Reverse CSMM swap: 5,000 USDT0 -> 5,000 USDC (Gold tier, 1:1)");
     }
 
     /// @notice Step 7: Revoking allowlist membership blocks further swaps.
@@ -330,9 +293,17 @@ contract ForkDemoTest is Test {
         assertFalse(hook.isAllowlisted(institution));
 
         // Attempt swap — should revert with SwapperNotAllowlisted
-        bytes memory innerError =
-            abi.encodeWithSelector(PermissionedCSMMHook.SwapperNotAllowlisted.selector, institution);
+        _expectHookRevert(
+            abi.encodeWithSelector(PermissionedCSMMHook.SwapperNotAllowlisted.selector, institution)
+        );
+        _swapUsdcIn(institution, 1_000e6);
+        console2.log("[ok] Revoked institution correctly blocked");
+    }
 
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    /// @dev Set vm.expectRevert for a hook callback failure wrapping `innerError`.
+    function _expectHookRevert(bytes memory innerError) internal {
         vm.expectRevert(
             abi.encodeWithSelector(
                 CustomRevert.WrappedError.selector,
@@ -342,18 +313,82 @@ contract ForkDemoTest is Test {
                 abi.encodePacked(Hooks.HookCallFailed.selector)
             )
         );
+    }
 
+    /// @dev Execute a USDC-in swap for `amount` USDC from the given institution.
+    function _swapUsdcIn(address inst, uint256 amount) internal {
         swapRouter.swap(
             poolKey,
             SwapParams({
                 zeroForOne:        zeroForOneIsUsdcIn,
-                amountSpecified:   -1_000e6,
+                amountSpecified:   -int256(amount),
                 sqrtPriceLimitX96: zeroForOneIsUsdcIn ? MIN_PRICE_LIMIT : MAX_PRICE_LIMIT
             }),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            abi.encode(institution)
+            abi.encode(inst)
         );
+    }
 
-        console2.log("[ok] Revoked institution correctly blocked");
+    // ─── Step 25: Tier 1 Feature Demonstrations ───────────────────────────────
+
+    /// @notice Gold tier member swaps 10,000 USDC → exactly 10,000 USDT0 (zero fee).
+    function test_goldTierZeroFeeSwap() public {
+        vm.selectFork(unichainForkId);
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToAllowlistReactive(address(0), institution);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
+
+        uint256 usdt0Before = IERC20(USDT0).balanceOf(address(this));
+        _swapUsdcIn(institution, 10_000e6);
+        assertEq(IERC20(USDT0).balanceOf(address(this)) - usdt0Before, 10_000e6, "Gold: zero fee");
+        console2.log("[ok] Gold tier: 10,000 USDC -> 10,000 USDT0 (0 fee)");
+    }
+
+    /// @notice Bronze tier (default) member has 3 bps deducted from output.
+    function test_bronzeTierFeeDeducted() public {
+        vm.selectFork(unichainForkId);
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToAllowlistReactive(address(0), institution);
+
+        uint256 usdt0Before = IERC20(USDT0).balanceOf(address(this));
+        _swapUsdcIn(institution, 10_000e6);
+        uint256 received = IERC20(USDT0).balanceOf(address(this)) - usdt0Before;
+        // 3 bps fee: 10_000e6 * 300 / 1_000_000 = 3_000_000 = 3e6
+        assertEq(received, 10_000e6 - 3e6, "Bronze: 3 bps fee deducted");
+        console2.log("[ok] Bronze tier: fee deducted, received:", received);
+    }
+
+    /// @notice Expired membership blocks the swap with MembershipExpired revert.
+    function test_expiredMembershipBlocksSwap() public {
+        vm.selectFork(unichainForkId);
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToAllowlistReactive(address(0), institution);
+        vm.prank(owner);
+        hook.setInstitutionExpiry(institution, block.timestamp + 30 days);
+        vm.warp(block.timestamp + 30 days + 1);
+
+        _expectHookRevert(abi.encodeWithSelector(IStableGate.MembershipExpired.selector, institution));
+        _swapUsdcIn(institution, 10_000e6);
+        console2.log("[ok] Expired membership correctly blocked");
+    }
+
+    /// @notice Daily volume limit: first 10_000e6 passes, second 10_000e6 hits 15_000e6 cap.
+    function test_dailyLimitEnforced() public {
+        vm.selectFork(unichainForkId);
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToAllowlistReactive(address(0), institution);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
+        vm.prank(owner);
+        hook.setDailyLimit(institution, 15_000e6);
+
+        _swapUsdcIn(institution, 10_000e6); // succeeds — 10k < 15k cap
+
+        _expectHookRevert(abi.encodeWithSelector(
+            IStableGate.DailyLimitExceeded.selector, institution, uint256(15_000e6), uint256(10_000e6)
+        ));
+        _swapUsdcIn(institution, 10_000e6); // reverts — 20k > 15k cap
+        console2.log("[ok] Daily limit enforced: second 10k swap blocked at 15k cap");
     }
 }

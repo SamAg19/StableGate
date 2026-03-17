@@ -13,8 +13,8 @@ contract MembershipNFTTest is Test {
     address institution2 = makeAddr("institution2");
     address nonAdmin = makeAddr("nonAdmin");
 
-    // Re-declare for vm.expectEmit
-    event TierUpdated(address indexed institution, IStableGate.Tier tier);
+    // Re-declare for vm.expectEmit — must match IStableGate (tier is indexed)
+    event TierUpdated(address indexed institution, IStableGate.Tier indexed tier);
 
     function setUp() public {
         nft = new MembershipNFT(admin);
@@ -133,7 +133,8 @@ contract MembershipNFTTest is Test {
         vm.prank(admin);
         uint256 tokenId = nft.grantMembership(institution1);
 
-        vm.expectEmit(true, false, false, true, address(nft));
+        // tier is indexed (topic_2), data is empty — check topic1 + topic2, no data
+        vm.expectEmit(true, true, false, false, address(nft));
         emit TierUpdated(institution1, IStableGate.Tier.Gold);
 
         vm.prank(admin);

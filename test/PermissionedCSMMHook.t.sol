@@ -310,7 +310,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
 
     // Re-declare SwapExecuted to use with vm.expectEmit
     event SwapExecuted(address indexed swapper, PoolId indexed poolId, bool zeroForOne, int256 amountSpecified);
-    event TierUpdated(address indexed institution, IStableGate.Tier tier);
+    event TierUpdated(address indexed institution, IStableGate.Tier indexed tier);
 
     // ─── Step 20: Tier-Based Fee & Expiry Tests ───────────────────────────────
 
