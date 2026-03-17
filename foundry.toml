@@ -10,6 +10,8 @@ optimizer = true
 optimizer_runs = 200
 
 [rpc_endpoints]
+base_mainnet = "https://mainnet.base.org"
 unichain_mainnet = "https://mainnet.unichain.org"
 unichain_sepolia = "${UNICHAIN_SEPOLIA_RPC}"
+base_sepolia = "${BASE_SEPOLIA_RPC}"
 reactive_lasna = "${REACTIVE_LASNA_RPC}"

@@ -103,7 +103,7 @@ contract AllowlistReactiveContractTest is Test {
         returns (IReactive.LogRecord memory)
     {
         return IReactive.LogRecord({
-            chain_id: 1301,
+            chain_id: 84532, // Base Sepolia — where MembershipNFT lives
             _contract: MEMBERSHIP_NFT,
             topic_0: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef,
             topic_1: 0, // from == address(0) → mint

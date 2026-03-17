@@ -6,10 +6,15 @@ import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol"
 /// @title AllowlistReactiveContract
 /// @notice Reactive Smart Contract deployed on Reactive Lasna (Chain ID: 5318007).
 ///
-/// Monitors MembershipNFT Transfer events on Unichain Sepolia (Chain ID: 1301).
+/// Monitors MembershipNFT Transfer events on Base Sepolia (Chain ID: 84532).
 /// When a mint is detected (from == address(0)), emits a Callback that triggers
 /// PermissionedCSMMHook.addToAllowlistReactive(rvmId, recipient) on Unichain Sepolia
-/// via the Reactive Network Callback Proxy.
+/// (Chain ID: 1301) via the Reactive Network Callback Proxy.
+///
+/// Chain topology:
+///   - MembershipNFT lives on Base (Sepolia: 84532) — event source
+///   - PermissionedCSMMHook lives on Unichain (Sepolia: 1301) — callback destination
+///   - AllowlistReactiveContract lives on Reactive Lasna — monitors Base, callbacks Unichain
 ///
 /// Dual execution model:
 ///   - On Reactive Network (RNK): constructor subscribes to events, admin functions work
@@ -22,7 +27,10 @@ import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol"
 contract AllowlistReactiveContract is AbstractReactive {
     // ─── Constants ───────────────────────────────────────────────────────────
 
-    /// @notice Unichain Sepolia chain ID — source of MembershipNFT events and hook callback target.
+    /// @notice Base Sepolia chain ID — where MembershipNFT is deployed (event source).
+    uint256 public constant BASE_CHAIN_ID = 84532;
+
+    /// @notice Unichain Sepolia chain ID — where PermissionedCSMMHook is deployed (callback target).
     uint256 public constant UNICHAIN_SEPOLIA_CHAIN_ID = 1301;
 
     /// @notice keccak256("Transfer(address,address,uint256)") — standard ERC721 Transfer topic.
@@ -37,7 +45,7 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     // ─── State ────────────────────────────────────────────────────────────────
 
-    /// @notice MembershipNFT contract on Unichain Sepolia to monitor.
+    /// @notice MembershipNFT contract on Base Sepolia to monitor.
     address public immutable membershipNFT;
 
     /// @notice PermissionedCSMMHook on Unichain Sepolia — callback target.
@@ -53,7 +61,7 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     // ─── Constructor ──────────────────────────────────────────────────────────
 
-    /// @param _membershipNFT  MembershipNFT address on Unichain Sepolia.
+    /// @param _membershipNFT  MembershipNFT address on Base Sepolia.
     /// @param _hookContract   PermissionedCSMMHook address on Unichain Sepolia.
     ///
     /// The constructor runs in both environments (RNK and ReactVM).
@@ -64,7 +72,7 @@ contract AllowlistReactiveContract is AbstractReactive {
         hookContract = _hookContract;
 
         if (!vm) {
-            // Subscribe to Transfer events on MembershipNFT where from == address(0)
+            // Subscribe to Transfer events on MembershipNFT (Base Sepolia) where from == address(0)
             // (i.e., mint events only — not transfers between existing holders).
             //
             // topic_0 = Transfer(address,address,uint256) event signature
@@ -72,7 +80,7 @@ contract AllowlistReactiveContract is AbstractReactive {
             // topic_2 = REACTIVE_IGNORE = any recipient address
             // topic_3 = REACTIVE_IGNORE = any tokenId
             SERVICE_ADDR.subscribe(
-                UNICHAIN_SEPOLIA_CHAIN_ID,
+                BASE_CHAIN_ID,
                 membershipNFT,
                 TRANSFER_EVENT_TOPIC,
                 ZERO_TOPIC,
@@ -119,10 +127,10 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     // ─── Admin (RNK only) ─────────────────────────────────────────────────────
 
-    /// @notice Pause monitoring by unsubscribing from MembershipNFT events.
+    /// @notice Pause monitoring by unsubscribing from MembershipNFT events on Base.
     function pause() external rnOnly {
         SERVICE_ADDR.unsubscribe(
-            UNICHAIN_SEPOLIA_CHAIN_ID,
+            BASE_CHAIN_ID,
             membershipNFT,
             TRANSFER_EVENT_TOPIC,
             ZERO_TOPIC,
@@ -131,10 +139,10 @@ contract AllowlistReactiveContract is AbstractReactive {
         );
     }
 
-    /// @notice Resume monitoring by re-subscribing to MembershipNFT events.
+    /// @notice Resume monitoring by re-subscribing to MembershipNFT events on Base.
     function resume() external rnOnly {
         SERVICE_ADDR.subscribe(
-            UNICHAIN_SEPOLIA_CHAIN_ID,
+            BASE_CHAIN_ID,
             membershipNFT,
             TRANSFER_EVENT_TOPIC,
             ZERO_TOPIC,
