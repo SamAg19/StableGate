@@ -308,9 +308,10 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         swap(poolKey, true, -1e18, hookData);
     }
 
-    // Re-declare SwapExecuted to use with vm.expectEmit
+    // Re-declare events to use with vm.expectEmit
     event SwapExecuted(address indexed swapper, PoolId indexed poolId, bool zeroForOne, int256 amountSpecified);
     event TierUpdated(address indexed institution, IStableGate.Tier indexed tier);
+    event InstitutionStateCleared(address indexed institution);
 
     // ─── Step 20: Tier-Based Fee & Expiry Tests ───────────────────────────────
 
@@ -647,5 +648,149 @@ contract PermissionedCSMMHookTest is Test, Deployers {
             )
         );
         swap(poolKey, true, -1, abi.encode(institution2));
+    }
+
+    // ─── Atomic State Cleanup on Revocation ───────────────────────────────────
+
+    function test_revokeWipesTier() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        // institution1 is already Gold (set in setUp)
+
+        vm.prank(owner);
+        hook.removeFromAllowlist(institution1);
+        // Tier reset to Bronze on revocation
+        assertEq(uint8(hook.institutionTier(institution1)), uint8(IStableGate.Tier.Bronze));
+
+        // Re-add — tier stays Bronze (clean slate, not inherited Gold)
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        assertEq(uint8(hook.institutionTier(institution1)), uint8(IStableGate.Tier.Bronze));
+    }
+
+    function test_revokeWipesExpiry() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        vm.prank(owner);
+        hook.setInstitutionExpiry(institution1, block.timestamp + 30 days);
+        assertGt(hook.institutionExpiry(institution1), 0);
+
+        vm.prank(owner);
+        hook.removeFromAllowlist(institution1);
+        assertEq(hook.institutionExpiry(institution1), 0);
+
+        // Re-add — expiry is still 0 (clean slate)
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+        assertEq(hook.institutionExpiry(institution1), 0);
+    }
+
+    function test_revokeWipesDailyVolume() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+
+        // Swap near the Bronze cap
+        swap(poolKey, true, -int256(900_000e6), abi.encode(institution2));
+        assertGt(hook.dailyVolume(institution2), 0);
+
+        vm.prank(owner);
+        hook.removeFromAllowlist(institution2);
+        assertEq(hook.dailyVolume(institution2), 0);
+        assertEq(hook.lastResetBlock(institution2), 0);
+
+        // Re-add — full 1M cap is available again
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        swap(poolKey, true, -int256(900_000e6), abi.encode(institution2)); // succeeds — fresh window
+    }
+
+    function test_revokeEmitsStateClearedEvent() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+
+        vm.expectEmit(true, false, false, false, address(hook));
+        emit InstitutionStateCleared(institution1);
+
+        vm.prank(owner);
+        hook.removeFromAllowlist(institution1);
+    }
+
+    function test_reOnboardingStartsFresh() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
+        vm.prank(owner);
+        hook.setInstitutionExpiry(institution2, block.timestamp + 365 days);
+
+        // Swap as Gold — zero fee
+        uint256 amount = 500_000e6;
+        uint256 bal1Before = currency1.balanceOf(address(this));
+        swap(poolKey, true, -int256(amount), abi.encode(institution2));
+        assertEq(currency1.balanceOf(address(this)) - bal1Before, amount, "Gold: no fee");
+
+        // Revoke
+        vm.prank(owner);
+        hook.removeFromAllowlist(institution2);
+
+        // Re-onboard — no explicit tier/expiry set (RSC callbacks would follow in production)
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+
+        // Tier is Bronze, expiry is 0, volume is 0 — no Gold state leaked
+        assertEq(uint8(hook.institutionTier(institution2)), uint8(IStableGate.Tier.Bronze));
+        assertEq(hook.institutionExpiry(institution2), 0);
+        assertEq(hook.dailyVolume(institution2), 0);
+
+        // Bronze fee applies
+        uint256 bal1Before2 = currency1.balanceOf(address(this));
+        swap(poolKey, true, -int256(amount), abi.encode(institution2));
+        uint256 expectedBronzeOut = amount - (amount * 300 / 1_000_000);
+        assertEq(currency1.balanceOf(address(this)) - bal1Before2, expectedBronzeOut, "Bronze fee after re-onboarding");
+
+        // Bronze daily cap enforced: 500k already swapped, another 600k would hit 1M cap
+        bytes memory innerError = abi.encodeWithSelector(
+            IStableGate.DailyLimitExceeded.selector,
+            institution2,
+            hook.DAILY_LIMIT_BRONZE(),
+            uint256(600_000e6)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeSwap.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+        swap(poolKey, true, -int256(600_000e6), abi.encode(institution2));
+    }
+
+    function test_revokeByProxyAlsoClears() public {
+        vm.prank(owner);
+        hook.addToAllowlist(institution2);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
+        vm.prank(owner);
+        hook.setInstitutionExpiry(institution2, block.timestamp + 90 days);
+        swap(poolKey, true, -int256(2_000_000e6), abi.encode(institution2));
+
+        // Reactive proxy revokes via removeFromAllowlistReactive
+        vm.expectEmit(true, false, false, false, address(hook));
+        emit InstitutionStateCleared(institution2);
+
+        vm.prank(reactiveProxy);
+        hook.removeFromAllowlistReactive(address(0), institution2);
+
+        assertFalse(hook.isAllowlisted(institution2));
+        assertEq(uint8(hook.institutionTier(institution2)), uint8(IStableGate.Tier.Bronze));
+        assertEq(hook.institutionExpiry(institution2), 0);
+        assertEq(hook.dailyVolume(institution2), 0);
+        assertEq(hook.lastResetBlock(institution2), 0);
     }
 }

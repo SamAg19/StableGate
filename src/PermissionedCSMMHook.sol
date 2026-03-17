@@ -36,6 +36,8 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     event AddressAllowlisted(address indexed account, uint256 timestamp);
     event AddressRemovedFromAllowlist(address indexed account, uint256 timestamp);
     event SwapExecuted(address indexed swapper, PoolId indexed poolId, bool zeroForOne, int256 amountSpecified);
+    /// @notice Emitted when all institution-specific state is wiped on revocation.
+    event InstitutionStateCleared(address indexed institution);
 
     // ─── Fee Constants ────────────────────────────────────────────────────────
 
@@ -257,20 +259,29 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     /// @notice Remove an address from the allowlist. Owner only.
     function removeFromAllowlist(address account) external onlyOwner {
-        if (!allowlist[account]) revert NotAllowlisted(account);
-        allowlist[account] = false;
-        allowlistCount--;
-        emit AddressRemovedFromAllowlist(account, block.timestamp);
+        _removeFromAllowlist(account);
     }
 
-    /// @notice Remove an address from the allowlist. Callable by owner or reactive proxy (for auto-revocation).
+    /// @notice Remove an address from the allowlist. Callable by the reactive proxy (for auto-revocation).
     function removeFromAllowlistReactive(address rvmId, address account) external {
         if (msg.sender != reactiveCallbackProxy) revert NotOwnerOrReactive();
         (rvmId);
+        _removeFromAllowlist(account);
+    }
+
+    /// @dev Atomically removes from allowlist and clears all institution-specific state.
+    function _removeFromAllowlist(address account) internal {
         if (!allowlist[account]) revert NotAllowlisted(account);
         allowlist[account] = false;
         allowlistCount--;
         emit AddressRemovedFromAllowlist(account, block.timestamp);
+
+        // Reset all per-institution state so re-onboarding always starts from a clean slate.
+        institutionTier[account]   = Tier.Bronze;
+        institutionExpiry[account] = 0;
+        dailyVolume[account]       = 0;
+        lastResetBlock[account]    = 0;
+        emit InstitutionStateCleared(account);
     }
 
     function batchAddToAllowlist(address[] calldata accounts) external onlyOwner {
