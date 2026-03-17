@@ -218,4 +218,47 @@ contract MembershipNFTTest is Test {
 
         assertFalse(nft.isMember(institution1));
     }
+
+    // ─── ExpirySet Event Tests ──────────────────────────────────────────────
+
+    event ExpirySet(address indexed institution, uint256 expiry);
+
+    function test_grantMembershipEmitsExpirySet() public {
+        vm.prank(admin);
+        nft.setDefaultExpiryDuration(365 days);
+
+        vm.warp(1000);
+
+        vm.expectEmit(true, false, false, true, address(nft));
+        emit ExpirySet(institution1, 1000 + 365 days);
+
+        vm.prank(admin);
+        nft.grantMembership(institution1);
+    }
+
+    function test_grantWithTierEmitsExpirySet() public {
+        vm.prank(admin);
+        nft.setDefaultExpiryDuration(90 days);
+
+        vm.warp(2000);
+
+        vm.expectEmit(true, false, false, true, address(nft));
+        emit ExpirySet(institution1, 2000 + 90 days);
+
+        vm.prank(admin);
+        nft.grantMembershipWithTier(institution1, IStableGate.Tier.Gold);
+    }
+
+    function test_setExpiryEmitsExpirySet() public {
+        vm.prank(admin);
+        uint256 tokenId = nft.grantMembership(institution1);
+
+        uint256 newExpiry = block.timestamp + 180 days;
+
+        vm.expectEmit(true, false, false, true, address(nft));
+        emit ExpirySet(institution1, newExpiry);
+
+        vm.prank(admin);
+        nft.setExpiry(tokenId, newExpiry);
+    }
 }

@@ -12,6 +12,7 @@ contract MembershipNFT is ERC721, IStableGate {
 
     event MembershipGranted(address indexed institution, uint256 tokenId);
     event MembershipRevoked(address indexed institution, uint256 tokenId);
+    event ExpirySet(address indexed institution, uint256 expiry);
 
     address public admin;
     uint256 public nextTokenId = 1;
@@ -57,6 +58,7 @@ contract MembershipNFT is ERC721, IStableGate {
         _mint(to, tokenId);
         emit MembershipGranted(to, tokenId);
         emit TierUpdated(to, tier);
+        emit ExpirySet(to, tokenExpiry[tokenId]);
     }
 
     function revokeMembership(uint256 tokenId) external onlyAdmin {
@@ -76,8 +78,9 @@ contract MembershipNFT is ERC721, IStableGate {
 
     /// @notice Update the expiry timestamp for an existing token. Admin only.
     function setExpiry(uint256 tokenId, uint256 timestamp) external onlyAdmin {
-        ownerOf(tokenId); // reverts if token doesn't exist
+        address institution = ownerOf(tokenId); // reverts if token doesn't exist
         tokenExpiry[tokenId] = timestamp;
+        emit ExpirySet(institution, timestamp);
     }
 
     /// @notice Set the default expiry duration applied to new mints. Admin only.
