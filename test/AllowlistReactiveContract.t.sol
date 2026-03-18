@@ -192,10 +192,10 @@ contract AllowlistReactiveContractTest is Test {
             if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
                 bytes4 selector = bytes4(payload);
-                if (selector == bytes4(keccak256("setInstitutionTier(address,uint8)"))) {
+                if (selector == bytes4(keccak256("setInstitutionTier(address,address,uint8)"))) {
                     found = true;
-                    // Decode and verify tier value
-                    (address inst, uint8 tier) = abi.decode(_stripSelector(payload), (address, uint8));
+                    // Decode: address(0) placeholder, institution, tier
+                    (, address inst, uint8 tier) = abi.decode(_stripSelector(payload), (address, address, uint8));
                     assertEq(inst, INSTITUTION, "institution matches");
                     assertEq(tier, uint8(IStableGate.Tier.Gold), "Gold tier forwarded");
                 }
@@ -244,7 +244,7 @@ contract AllowlistReactiveContractTest is Test {
                 bytes4 selector = bytes4(payload);
                 assertEq(
                     selector,
-                    bytes4(keccak256("setInstitutionTier(address,uint8)")),
+                    bytes4(keccak256("setInstitutionTier(address,address,uint8)")),
                     "selector matches setInstitutionTier(address,uint8)"
                 );
             }
@@ -382,7 +382,7 @@ contract AllowlistReactiveContractTest is Test {
             if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
                 bytes4 selector = bytes4(payload);
-                if (selector == bytes4(keccak256("setInstitutionExpiry(address,uint256)"))) {
+                if (selector == bytes4(keccak256("setInstitutionExpiry(address,address,uint256)"))) {
                     found = true;
                 }
             }
@@ -404,10 +404,10 @@ contract AllowlistReactiveContractTest is Test {
                 bytes4 selector = bytes4(payload);
                 assertEq(
                     selector,
-                    bytes4(keccak256("setInstitutionExpiry(address,uint256)")),
+                    bytes4(keccak256("setInstitutionExpiry(address,address,uint256)")),
                     "selector matches"
                 );
-                (address inst, uint256 exp) = abi.decode(_stripSelector(payload), (address, uint256));
+                (, address inst, uint256 exp) = abi.decode(_stripSelector(payload), (address, address, uint256));
                 assertEq(inst, INSTITUTION, "institution matches");
                 assertEq(exp, expiry, "expiry matches");
             }
@@ -438,8 +438,8 @@ contract AllowlistReactiveContractTest is Test {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
                 bytes4 selector = bytes4(payload);
                 if (selector == bytes4(keccak256("addToAllowlistReactive(address,address)"))) addFound = true;
-                if (selector == bytes4(keccak256("setInstitutionTier(address,uint8)"))) tierFound = true;
-                if (selector == bytes4(keccak256("setInstitutionExpiry(address,uint256)"))) expiryFound = true;
+                if (selector == bytes4(keccak256("setInstitutionTier(address,address,uint8)"))) tierFound = true;
+                if (selector == bytes4(keccak256("setInstitutionExpiry(address,address,uint256)"))) expiryFound = true;
             }
         }
         assertTrue(addFound, "addToAllowlist callback");
@@ -511,9 +511,9 @@ contract AllowlistReactiveContractTest is Test {
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
-                if (bytes4(payload) == bytes4(keccak256("addToLPWhitelist(address)"))) {
+                if (bytes4(payload) == bytes4(keccak256("addToLPWhitelist(address,address)"))) {
                     found = true;
-                    address lp = abi.decode(_stripSelector(payload), (address));
+                    (, address lp) = abi.decode(_stripSelector(payload), (address, address));
                     assertEq(lp, LP_ADDRESS, "LP address matches");
                 }
             }
@@ -532,9 +532,9 @@ contract AllowlistReactiveContractTest is Test {
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
-                if (bytes4(payload) == bytes4(keccak256("removeFromLPWhitelist(address)"))) {
+                if (bytes4(payload) == bytes4(keccak256("removeFromLPWhitelist(address,address)"))) {
                     found = true;
-                    address lp = abi.decode(_stripSelector(payload), (address));
+                    (, address lp) = abi.decode(_stripSelector(payload), (address, address));
                     assertEq(lp, LP_ADDRESS, "LP address matches");
                 }
             }
@@ -556,12 +556,12 @@ contract AllowlistReactiveContractTest is Test {
             if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
                 bytes4 selector = bytes4(payload);
-                if (selector == bytes4(keccak256("removeFromLPWhitelist(address)"))) {
+                if (selector == bytes4(keccak256("removeFromLPWhitelist(address,address)"))) {
                     revokeFound = true;
-                    address lp = abi.decode(_stripSelector(payload), (address));
+                    (, address lp) = abi.decode(_stripSelector(payload), (address, address));
                     assertEq(lp, LP_ADDRESS, "revocation targets original holder");
                 }
-                if (selector == bytes4(keccak256("addToLPWhitelist(address)"))) {
+                if (selector == bytes4(keccak256("addToLPWhitelist(address,address)"))) {
                     grantFound = true;
                 }
             }
@@ -585,7 +585,7 @@ contract AllowlistReactiveContractTest is Test {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
                 bytes4 selector = bytes4(payload);
                 if (selector == bytes4(keccak256("addToAllowlistReactive(address,address)"))) addFound = true;
-                if (selector == bytes4(keccak256("addToLPWhitelist(address)"))) lpFound = true;
+                if (selector == bytes4(keccak256("addToLPWhitelist(address,address)"))) lpFound = true;
             }
         }
         assertTrue(addFound, "trading addToAllowlist callback fires");
@@ -604,7 +604,7 @@ contract AllowlistReactiveContractTest is Test {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
                 assertEq(
                     bytes4(payload),
-                    bytes4(keccak256("addToLPWhitelist(address)")),
+                    bytes4(keccak256("addToLPWhitelist(address,address)")),
                     "selector matches addToLPWhitelist"
                 );
             }
@@ -626,7 +626,7 @@ contract AllowlistReactiveContractTest is Test {
                 bytes memory payload = abi.decode(logs[i].data, (bytes));
                 bytes4 selector = bytes4(payload);
                 if (selector == bytes4(keccak256("addToAllowlistReactive(address,address)"))) tradeFound = true;
-                if (selector == bytes4(keccak256("addToLPWhitelist(address)"))) lpFound = true;
+                if (selector == bytes4(keccak256("addToLPWhitelist(address,address)"))) lpFound = true;
             }
         }
         assertTrue(tradeFound, "trading callback");
