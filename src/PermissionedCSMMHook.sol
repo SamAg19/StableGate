@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import {BaseHook} from "v4-hooks-public/base/BaseHook.sol";
+import {AbstractCallback} from "reactive-lib/abstract-base/AbstractCallback.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -17,13 +18,13 @@ import {IStableGate} from "./interfaces/IStableGate.sol";
 /// @notice Uniswap v4 hook implementing a Constant Sum Market Maker (1:1 pricing) with
 ///         KYC-gated allowlist access, tier-based dynamic fees, membership expiry enforcement,
 ///         and per-institution daily swap volume limits.
-contract PermissionedCSMMHook is BaseHook, IStableGate {
+///         Extends AbstractCallback for Reactive Network callback authorization via rvmIdOnly.
+contract PermissionedCSMMHook is BaseHook, AbstractCallback, IStableGate {
     using CurrencyLibrary for Currency;
     using SafeCast for int256;
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
-    error NotOwnerOrReactive();
     error NotOwner();
     error SwapperNotAllowlisted(address swapper);
     error AddZeroAddress();
@@ -42,14 +43,12 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     event AddressAllowlisted(address indexed account, uint256 timestamp);
     event AddressRemovedFromAllowlist(address indexed account, uint256 timestamp);
     event SwapExecuted(address indexed swapper, PoolId indexed poolId, bool zeroForOne, int256 amountSpecified);
-    /// @notice Emitted when all institution-specific state is wiped on revocation.
     event InstitutionStateCleared(address indexed institution);
     event FeesWithdrawn(address indexed recipient, address indexed currency, uint256 amount);
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     event LpFeeSplitUpdated(uint256 oldSplitBps, uint256 newSplitBps);
     event FeesDistributed(address indexed currency, uint256 lpAmount, uint256 operatorAmount);
     event LPWhitelistUpdated(address indexed lp, bool added);
-    event LPReactiveCallbackProxyUpdated(address indexed oldProxy, address indexed newProxy);
 
     // ─── Fee Constants ────────────────────────────────────────────────────────
 
@@ -91,8 +90,6 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     // ─── State ───────────────────────────────────────────────────────────────
 
     address public owner;
-    /// @notice The Reactive Network callback proxy — can call allowlist functions on behalf of the RSC.
-    address public reactiveCallbackProxy;
 
     mapping(address => bool) public allowlist;
     uint256 public allowlistCount;
@@ -107,8 +104,6 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     mapping(address => bool) public lpWhitelist;
     uint256 public lpWhitelistCount;
-    /// @notice Separate callback proxy for LP RSC — distinct trust relationship from swap RSC.
-    address public lpReactiveCallbackProxy;
 
     // ─── Daily Volume Limit State ─────────────────────────────────────────────
 
@@ -128,25 +123,22 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
         _;
     }
 
-    modifier onlyOwnerOrReactive() {
-        if (msg.sender != owner && msg.sender != reactiveCallbackProxy) revert NotOwnerOrReactive();
-        _;
-    }
-
     // ─── Constructor ──────────────────────────────────────────────────────────
+
+    /// @notice Unichain Sepolia callback proxy address (Reactive Network constant).
+    address public constant CALLBACK_PROXY = 0x9299472A6399Fd1027ebF067571Eb3e3D7837FC4;
 
     constructor(
         IPoolManager _poolManager,
-        address _reactiveCallbackProxy,
-        address _lpReactiveCallbackProxy,
         address _feeRecipient
-    ) BaseHook(_poolManager) {
+    ) BaseHook(_poolManager) AbstractCallback(CALLBACK_PROXY) {
         if (_feeRecipient == address(0)) revert ZeroAddress();
         owner = msg.sender;
-        reactiveCallbackProxy = _reactiveCallbackProxy;
-        lpReactiveCallbackProxy = _lpReactiveCallbackProxy;
         feeRecipient = _feeRecipient;
     }
+
+    /// @dev Override receive() to resolve conflict between AbstractPayer and any other parent.
+    receive() external payable override {}
 
     // ─── Hook Permissions ─────────────────────────────────────────────────────
 
@@ -303,52 +295,10 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
         dailyVolume[swapper] += absAmount;
     }
 
-    // ─── Allowlist Management ─────────────────────────────────────────────────
+    // ─── Allowlist Management (owner-only direct calls) ─────────────────────
 
     function addToAllowlist(address account) external onlyOwner {
         _addToAllowlist(account);
-    }
-
-    /// @notice Called by the Reactive Network Callback Proxy after a mint RSC event.
-    function addToAllowlistReactive(address rvmId, address account) external {
-        if (msg.sender != reactiveCallbackProxy) revert NotOwnerOrReactive();
-        (rvmId);
-        _addToAllowlist(account);
-    }
-
-    function _addToAllowlist(address account) internal {
-        if (account == address(0)) revert AddZeroAddress();
-        if (allowlist[account]) revert AlreadyAllowlisted(account);
-        allowlist[account] = true;
-        allowlistCount++;
-        emit AddressAllowlisted(account, block.timestamp);
-    }
-
-    /// @notice Remove an address from the allowlist. Owner only.
-    function removeFromAllowlist(address account) external onlyOwner {
-        _removeFromAllowlist(account);
-    }
-
-    /// @notice Remove an address from the allowlist. Callable by the reactive proxy (for auto-revocation).
-    function removeFromAllowlistReactive(address rvmId, address account) external {
-        if (msg.sender != reactiveCallbackProxy) revert NotOwnerOrReactive();
-        (rvmId);
-        _removeFromAllowlist(account);
-    }
-
-    /// @dev Atomically removes from allowlist and clears all institution-specific state.
-    function _removeFromAllowlist(address account) internal {
-        if (!allowlist[account]) revert NotAllowlisted(account);
-        allowlist[account] = false;
-        allowlistCount--;
-        emit AddressRemovedFromAllowlist(account, block.timestamp);
-
-        // Reset all per-institution state so re-onboarding always starts from a clean slate.
-        institutionTier[account]   = Tier.Bronze;
-        institutionExpiry[account] = 0;
-        dailyVolume[account]       = 0;
-        lastResetBlock[account]    = 0;
-        emit InstitutionStateCleared(account);
     }
 
     function batchAddToAllowlist(address[] calldata accounts) external onlyOwner {
@@ -367,23 +317,73 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
         return allowlist[account];
     }
 
-    // ─── Tier & Expiry Management ─────────────────────────────────────────────
+    // ─── Reactive Network Callback Functions (rvmIdOnly) ─────────────────────
 
-    /// @notice Set the tier for an institution. Callable by owner or reactive proxy.
-    function setInstitutionTier(address institution, Tier tier) external onlyOwnerOrReactive {
+    /// @notice Called by Reactive Network callback proxy after a mint RSC event.
+    function addToAllowlistReactive(address _rvm_id, address account) external rvmIdOnly(_rvm_id) {
+        _addToAllowlist(account);
+    }
+
+    /// @notice Remove from allowlist + clear state. Called by RSC on burn/transfer.
+    function removeFromAllowlistReactive(address _rvm_id, address account) external rvmIdOnly(_rvm_id) {
+        _removeFromAllowlist(account);
+    }
+
+    /// @notice Set institution tier. Called by RSC on TierUpdated event.
+    function setInstitutionTier(address _rvm_id, address institution, Tier tier) external rvmIdOnly(_rvm_id) {
         institutionTier[institution] = tier;
         emit TierUpdated(institution, tier);
     }
 
-    /// @notice Set the expiry for an institution. Callable by owner or reactive proxy.
-    function setInstitutionExpiry(address institution, uint256 expiry) external onlyOwnerOrReactive {
+    /// @notice Set institution expiry. Called by RSC on ExpirySet event.
+    function setInstitutionExpiry(address _rvm_id, address institution, uint256 expiry) external rvmIdOnly(_rvm_id) {
         institutionExpiry[institution] = expiry;
     }
 
-    // ─── Daily Limit Management ───────────────────────────────────────────────
+    /// @notice Add to LP whitelist. Called by RSC on LP NFT mint.
+    function addToLPWhitelist(address _rvm_id, address lp) external rvmIdOnly(_rvm_id) {
+        if (lp == address(0)) revert ZeroAddress();
+        if (lpWhitelist[lp]) revert LPAlreadyWhitelisted(lp);
+        lpWhitelist[lp] = true;
+        lpWhitelistCount++;
+        emit LPWhitelistUpdated(lp, true);
+    }
 
-    function setBlocksPerDay(uint256 blocks) external onlyOwner {
-        blocksPerDay = blocks;
+    /// @notice Remove from LP whitelist. Called by RSC on LP NFT burn/transfer.
+    function removeFromLPWhitelist(address _rvm_id, address lp) external rvmIdOnly(_rvm_id) {
+        if (!lpWhitelist[lp]) revert LPNotInWhitelist(lp);
+        lpWhitelist[lp] = false;
+        lpWhitelistCount--;
+        emit LPWhitelistUpdated(lp, false);
+    }
+
+    function isLPWhitelisted(address lp) external view returns (bool) {
+        return lpWhitelist[lp];
+    }
+
+    // ─── Internal Allowlist Helpers ──────────────────────────────────────────
+
+    function _addToAllowlist(address account) internal {
+        if (account == address(0)) revert AddZeroAddress();
+        if (allowlist[account]) revert AlreadyAllowlisted(account);
+        allowlist[account] = true;
+        allowlistCount++;
+        emit AddressAllowlisted(account, block.timestamp);
+    }
+
+    /// @dev Atomically removes from allowlist and clears all institution-specific state.
+    function _removeFromAllowlist(address account) internal {
+        if (!allowlist[account]) revert NotAllowlisted(account);
+        allowlist[account] = false;
+        allowlistCount--;
+        emit AddressRemovedFromAllowlist(account, block.timestamp);
+
+        // Reset all per-institution state so re-onboarding always starts from a clean slate.
+        institutionTier[account]   = Tier.Bronze;
+        institutionExpiry[account] = 0;
+        dailyVolume[account]       = 0;
+        lastResetBlock[account]    = 0;
+        emit InstitutionStateCleared(account);
     }
 
     // ─── Fee Management ────────────────────────────────────────────────────
@@ -391,10 +391,8 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     function withdrawFees(address currency) external onlyOwner {
         uint256 amount = accruedFees[currency];
         if (amount == 0) revert ZeroFees();
-
         accruedFees[currency] = 0;
         Currency.wrap(currency).transfer(feeRecipient, amount);
-
         emit FeesWithdrawn(feeRecipient, currency, amount);
     }
 
@@ -410,38 +408,10 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
         lpFeeSplitBps = splitBps;
     }
 
-    // ─── LP Whitelist Management ─────────────────────────────────────────────
-
-    function addToLPWhitelist(address lp) external {
-        if (msg.sender != owner && msg.sender != lpReactiveCallbackProxy) revert NotOwnerOrReactive();
-        if (lp == address(0)) revert ZeroAddress();
-        if (lpWhitelist[lp]) revert LPAlreadyWhitelisted(lp);
-        lpWhitelist[lp] = true;
-        lpWhitelistCount++;
-        emit LPWhitelistUpdated(lp, true);
-    }
-
-    function removeFromLPWhitelist(address lp) external {
-        if (msg.sender != owner && msg.sender != lpReactiveCallbackProxy) revert NotOwnerOrReactive();
-        if (!lpWhitelist[lp]) revert LPNotInWhitelist(lp);
-        lpWhitelist[lp] = false;
-        lpWhitelistCount--;
-        emit LPWhitelistUpdated(lp, false);
-    }
-
-    function isLPWhitelisted(address lp) external view returns (bool) {
-        return lpWhitelist[lp];
-    }
-
-    function setLPReactiveCallbackProxy(address proxy) external onlyOwner {
-        emit LPReactiveCallbackProxyUpdated(lpReactiveCallbackProxy, proxy);
-        lpReactiveCallbackProxy = proxy;
-    }
-
     // ─── Admin Functions ──────────────────────────────────────────────────────
 
-    function setReactiveCallbackProxy(address proxy) external onlyOwner {
-        reactiveCallbackProxy = proxy;
+    function setBlocksPerDay(uint256 blocks) external onlyOwner {
+        blocksPerDay = blocks;
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
