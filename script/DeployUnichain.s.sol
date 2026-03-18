@@ -47,8 +47,10 @@ contract DeployUnichain is Script {
     uint256 constant HOOK_RESERVE     = 200_000e6; // tokens seeded directly into hook
 
     function run() external {
-        address deployer    = vm.envAddress("DEPLOYER_ADDRESS");
-        address institution = vm.envAddress("INSTITUTION_ADDRESS");
+        address deployer          = vm.envAddress("DEPLOYER_ADDRESS");
+        address institutionBronze = vm.envAddress("INSTITUTION_BRONZE");
+        address institutionSilver = vm.envAddress("INSTITUTION_SILVER");
+        address institutionGold   = vm.envAddress("INSTITUTION_GOLD");
 
         // ── Step 1: Mine hook salt before broadcast ─────────────────────────
         (address hookAddr, bytes32 salt) = HookMiner.find(
@@ -68,9 +70,13 @@ contract DeployUnichain is Script {
         mockUSDC.mint(deployer,      OPERATOR_MINT);
         mockUSDT0.mint(deployer,     OPERATOR_MINT);
 
-        // Mint to institution — for demo swaps and LP
-        mockUSDC.mint(institution,   INSTITUTION_MINT);
-        mockUSDT0.mint(institution,  INSTITUTION_MINT);
+        // Mint to each institution — for demo swaps and LP
+        mockUSDC.mint(institutionBronze,  INSTITUTION_MINT);
+        mockUSDT0.mint(institutionBronze, INSTITUTION_MINT);
+        mockUSDC.mint(institutionSilver,  INSTITUTION_MINT);
+        mockUSDT0.mint(institutionSilver, INSTITUTION_MINT);
+        mockUSDC.mint(institutionGold,    INSTITUTION_MINT);
+        mockUSDT0.mint(institutionGold,   INSTITUTION_MINT);
 
         // ── Step 3: Deploy hook ─────────────────────────────────────────────
         PermissionedCSMMHook hook = new PermissionedCSMMHook{salt: salt}(
@@ -138,7 +144,9 @@ contract DeployUnichain is Script {
         console2.log("  MockUSDC:              ", address(mockUSDC));
         console2.log("  MockUSDT0:             ", address(mockUSDT0));
         console2.log("  Operator USDC balance: ", IERC20(address(mockUSDC)).balanceOf(deployer));
-        console2.log("  Institution USDC:      ", IERC20(address(mockUSDC)).balanceOf(institution));
+        console2.log("  Bronze inst USDC:      ", IERC20(address(mockUSDC)).balanceOf(institutionBronze));
+        console2.log("  Silver inst USDC:      ", IERC20(address(mockUSDC)).balanceOf(institutionSilver));
+        console2.log("  Gold inst USDC:        ", IERC20(address(mockUSDC)).balanceOf(institutionGold));
         console2.log("");
         console2.log("Hook:");
         console2.log("  PermissionedCSMMHook:  ", address(hook));
