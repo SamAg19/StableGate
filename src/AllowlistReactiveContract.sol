@@ -2,27 +2,18 @@
 pragma solidity ^0.8.0;
 
 import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol";
-import {IStableGate} from "./interfaces/IStableGate.sol";
 
 /// @title AllowlistReactiveContract
 /// @notice Reactive Smart Contract deployed on Reactive Lasna (Chain ID: 5318007).
 ///
-/// Monitors two event types on Base Sepolia (Chain ID: 84532):
+/// Monitors events on Base Sepolia (Chain ID: 84532):
 ///   1. MembershipNFT Transfer events → auto-allowlist (mint), auto-revoke (burn/transfer)
 ///   2. TierUpdated events → forward tier metadata to hook via setInstitutionTier callback
+///   3. ExpirySet events → forward expiry to hook via setInstitutionExpiry callback
+///   4. LPMembershipNFT Transfer events → LP whitelist management
 ///
 /// Callbacks target PermissionedCSMMHook on Unichain Sepolia (Chain ID: 1301).
-///
-/// Chain topology:
-///   - MembershipNFT lives on Base (Sepolia: 84532) — event source
-///   - PermissionedCSMMHook lives on Unichain (Sepolia: 1301) — callback destination
-///   - AllowlistReactiveContract lives on Reactive Lasna — monitors Base, callbacks Unichain
-///
-/// Reactive Network multi-subscription:
-///   - Subscription 1: Transfer events (mint = allowlist, burn/transfer = revoke)
-///   - Subscription 2: TierUpdated events (forward tier to hook)
-///
-/// react() branches on the event topic_0 to determine which callback to emit.
+/// react() branches on topic_0 and log._contract to determine which callback to emit.
 contract AllowlistReactiveContract is AbstractReactive {
     // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -31,6 +22,9 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     /// @notice Unichain Sepolia chain ID — where PermissionedCSMMHook is deployed (callback target).
     uint256 public constant UNICHAIN_SEPOLIA_CHAIN_ID = 1301;
+
+    /// @notice Reactive Lasna chain ID.
+    uint256 public constant REACTIVE_CHAIN_ID = 5318007;
 
     /// @notice keccak256("Transfer(address,address,uint256)") — standard ERC721 Transfer topic.
     uint256 public constant TRANSFER_EVENT_TOPIC =
@@ -44,11 +38,8 @@ contract AllowlistReactiveContract is AbstractReactive {
     uint256 public constant EXPIRY_SET_EVENT_TOPIC =
         uint256(keccak256("ExpirySet(address,uint256)"));
 
-    /// @notice topic_1 filter value for mint events: from == address(0) → 32-byte zero.
-    uint256 public constant ZERO_TOPIC = 0;
-
     /// @notice Gas budget for the cross-chain callback transaction.
-    uint64 public constant CALLBACK_GAS_LIMIT = 200_000;
+    uint64 public constant CALLBACK_GAS_LIMIT = 1_000_000;
 
     // ─── State ────────────────────────────────────────────────────────────────
 
@@ -86,67 +77,22 @@ contract AllowlistReactiveContract is AbstractReactive {
 
         if (!vm) {
             // Subscription 1: All Transfer events on MembershipNFT (mint + burn + transfer).
-            // We subscribe with REACTIVE_IGNORE for topic_1 so we receive all Transfer events,
-            // then branch in react() based on from/to values.
-            SERVICE_ADDR.subscribe(
-                BASE_CHAIN_ID,
-                membershipNFT,
-                TRANSFER_EVENT_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-
+            SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
             // Subscription 2: TierUpdated events on MembershipNFT.
-            // topic_0 = keccak256("TierUpdated(address,uint8)")
-            SERVICE_ADDR.subscribe(
-                BASE_CHAIN_ID,
-                membershipNFT,
-                TIER_UPDATED_EVENT_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-
-            // Subscription 3: ExpirySet events on MembershipNFT — forward expiry to hook.
-            SERVICE_ADDR.subscribe(
-                BASE_CHAIN_ID,
-                membershipNFT,
-                EXPIRY_SET_EVENT_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-
-            // Subscription 4: Transfer events on LPMembershipNFT (LP mint/burn/transfer).
-            // Same topic as Subscription 1 but different origin contract.
-            // react() branches on log._contract to distinguish the two NFTs.
-            SERVICE_ADDR.subscribe(
-                BASE_CHAIN_ID,
-                lpMembershipNFT,
-                TRANSFER_EVENT_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
+            SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+            // Subscription 3: ExpirySet events on MembershipNFT.
+            SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+            // Subscription 4: Transfer events on LPMembershipNFT (same topic, different contract).
+            SERVICE_ADDR.subscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
         }
     }
 
     // ─── Core React Logic ─────────────────────────────────────────────────────
 
     /// @notice Called by ReactVM when a subscribed event matches.
-    ///
-    /// Handles two event types based on topic_0:
-    ///
-    /// 1. Transfer(address indexed from, address indexed to, uint256 indexed tokenId):
-    ///    - from == address(0): mint → addToAllowlistReactive(rvmId, to)
-    ///    - to == address(0): burn → removeFromAllowlistReactive(rvmId, from)
-    ///    - otherwise: transfer → removeFromAllowlistReactive(rvmId, from) (new holder not auto-granted)
-    ///
-    /// 2. TierUpdated(address indexed institution, uint8 tier):
-    ///    → setInstitutionTier(rvmId, institution, tier)
-    ///
-    /// @param log  The full log record delivered by Reactive Network.
+    /// Branches on topic_0 and log._contract to determine which callback to emit.
+    /// All callback payloads include address(0) as the first argument — Reactive Network
+    /// replaces this with the RVM ID (deployer address) at delivery time.
     function react(LogRecord calldata log) external override vmOnly {
         if (log.topic_0 == TRANSFER_EVENT_TOPIC) {
             if (log._contract == membershipNFT) {
@@ -172,24 +118,22 @@ contract AllowlistReactiveContract is AbstractReactive {
         callbackCount++;
 
         if (from == address(0)) {
-            // Mint: allowlist the recipient
             emit MintDetected(to, tokenId, log.block_number);
             emit CallbackTriggered(hookContract, callbackCount);
 
             bytes memory payload = abi.encodeWithSignature(
                 "addToAllowlistReactive(address,address)",
-                address(0), // placeholder — overwritten by Reactive Network with RVM ID
+                address(0),
                 to
             );
             emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
         } else {
-            // Burn (to == address(0)) or transfer between wallets: revoke the original holder
             emit BurnOrTransferDetected(from, tokenId, log.block_number);
             emit CallbackTriggered(hookContract, callbackCount);
 
             bytes memory payload = abi.encodeWithSignature(
                 "removeFromAllowlistReactive(address,address)",
-                address(0), // placeholder — overwritten by Reactive Network with RVM ID
+                address(0),
                 from
             );
             emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
@@ -205,23 +149,22 @@ contract AllowlistReactiveContract is AbstractReactive {
         callbackCount++;
 
         if (from == address(0)) {
-            // LP mint → addToLPWhitelist(to)
             emit LPMintDetected(to, tokenId, log.block_number);
             emit CallbackTriggered(hookContract, callbackCount);
 
             bytes memory payload = abi.encodeWithSignature(
-                "addToLPWhitelist(address)",
+                "addToLPWhitelist(address,address)",
+                address(0),
                 to
             );
             emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
         } else {
-            // LP burn or transfer → removeFromLPWhitelist(from)
-            // New holder does NOT automatically get LP access.
             emit LPBurnOrTransferDetected(from, tokenId, log.block_number);
             emit CallbackTriggered(hookContract, callbackCount);
 
             bytes memory payload = abi.encodeWithSignature(
-                "removeFromLPWhitelist(address)",
+                "removeFromLPWhitelist(address,address)",
+                address(0),
                 from
             );
             emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
@@ -229,19 +172,6 @@ contract AllowlistReactiveContract is AbstractReactive {
     }
 
     function _handleTierUpdated(LogRecord calldata log) internal {
-        // TierUpdated(address indexed institution, uint8 tier):
-        //   topic_1 = institution (indexed address, padded to 32 bytes)
-        //   topic_2 = tier value (uint8 stored as uint256 in a topic — BUT wait, uint8 is not
-        //             declared as `indexed` in the TierUpdated event, so it lives in the data field.
-        //             However, per IStableGate the event is:
-        //               event TierUpdated(address indexed institution, Tier tier)
-        //             Only `institution` is indexed. `tier` is in the log data (not a topic).
-        //             ReactVM provides the raw data bytes; we decode from log.data if available,
-        //             or use a simplified approach: encode the selector + institution + tier(0)
-        //             as a placeholder and let the hook update it separately.
-        //
-        //             For simplicity in the RSC, we read `tier` from topic_2 since Reactive Network
-        //             may pack non-indexed uint values into topics. We use a safe cast.
         address institution = address(uint160(log.topic_1));
         uint8 tier = uint8(log.topic_2);
 
@@ -250,22 +180,16 @@ contract AllowlistReactiveContract is AbstractReactive {
         emit TierUpdateDetected(institution, tier, log.block_number);
         emit CallbackTriggered(hookContract, callbackCount);
 
-        // Forward setInstitutionTier to the hook.
-        // Reactive Network overwrites the first argument with the RVM ID.
-        // setInstitutionTier(address rvmId_overwritten, address institution, uint8 tier)
-        // But our hook signature is setInstitutionTier(address, Tier) — Tier is uint8 under the hood.
         bytes memory payload = abi.encodeWithSignature(
-            "setInstitutionTier(address,uint8)",
-            institution, // this gets overwritten by RVM ID — institution is second param
+            "setInstitutionTier(address,address,uint8)",
+            address(0),
+            institution,
             tier
         );
         emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
     }
 
     function _handleExpirySet(LogRecord calldata log) internal {
-        // ExpirySet(address indexed institution, uint256 expiry):
-        //   topic_1 = institution (indexed address, padded to 32 bytes)
-        //   data    = expiry (non-indexed uint256)
         address institution = address(uint160(log.topic_1));
         uint256 expiry = abi.decode(log.data, (uint256));
 
@@ -275,7 +199,8 @@ contract AllowlistReactiveContract is AbstractReactive {
         emit CallbackTriggered(hookContract, callbackCount);
 
         bytes memory payload = abi.encodeWithSignature(
-            "setInstitutionExpiry(address,uint256)",
+            "setInstitutionExpiry(address,address,uint256)",
+            address(0),
             institution,
             expiry
         );
