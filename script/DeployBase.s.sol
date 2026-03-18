@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {MembershipNFT} from "../src/MembershipNFT.sol";
+import {LPMembershipNFT} from "../src/LPMembershipNFT.sol";
 
 /// @notice Deploy MembershipNFT to Base Sepolia.
 ///
@@ -23,6 +24,7 @@ contract DeployBase is Script {
         vm.startBroadcast();
 
         MembershipNFT nft = new MembershipNFT(deployer);
+        LPMembershipNFT lpNft = new LPMembershipNFT(deployer);
 
         // Configure default expiry so new memberships expire after 1 year by default.
         nft.setDefaultExpiryDuration(DEFAULT_EXPIRY_DURATION);
@@ -31,10 +33,12 @@ contract DeployBase is Script {
 
         console2.log("=== Base Sepolia Deployment ===");
         console2.log("MembershipNFT:          ", address(nft));
+        console2.log("LPMembershipNFT:        ", address(lpNft));
         console2.log("Admin:                  ", deployer);
         console2.log("DefaultExpiryDuration:  ", DEFAULT_EXPIRY_DURATION, "seconds (365 days)");
         console2.log("");
         console2.log("Set in .env:");
         console2.log("  MEMBERSHIP_NFT=", address(nft));
+        console2.log("  LP_MEMBERSHIP_NFT=", address(lpNft));
     }
 }
