@@ -30,7 +30,9 @@ contract DeployUnichain is Script {
     uint256 constant BLOCKS_PER_DAY = 7200;
 
     function run() external {
-        address deployer = vm.envAddress("DEPLOYER_ADDRESS");
+        address deployer  = vm.envAddress("DEPLOYER_ADDRESS");
+        address mockUSDC  = vm.envAddress("USDC_ADDRESS");
+        address mockUSDT0 = vm.envAddress("USDT0_ADDRESS");
 
         // Mine a CREATE2 salt that produces an address with the correct flag bits
         (address hookAddr, bytes32 salt) = HookMiner.find(
@@ -69,6 +71,10 @@ contract DeployUnichain is Script {
         console2.log("  Silver cap:", hook.DAILY_LIMIT_SILVER(), "USDC (6-dec)");
         console2.log("  Bronze cap:", hook.DAILY_LIMIT_BRONZE(), "USDC (6-dec)");
         console2.log("  blocksPerDay:", hook.blocksPerDay());
+        console2.log("");
+        console2.log("Token addresses (from env):");
+        console2.log("  USDC_ADDRESS=",  mockUSDC);
+        console2.log("  USDT0_ADDRESS=", mockUSDT0);
         console2.log("");
         console2.log("Set in .env:");
         console2.log("  HOOK_CONTRACT=", address(hook));
