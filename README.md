@@ -130,11 +130,26 @@ forge test --match-contract ForkDemoTest -vvv
 forge test -vvv
 ```
 
-Expected: **74 tests pass** (19 MembershipNFT + 35 hook + 12 RSC + 8 fork = 74 total).
+Expected: **151 tests pass** (22 MembershipNFT + 11 LPMembershipNFT + 71 hook + 22 RSC + 10 mock tokens + 2 deploy + 13 fork = 151 total).
+
+## Testnet Tokens
+
+StableGate testnet uses `MockUSDC` and `MockUSDT0` — self-controlled ERC20s with public mint, 6 decimals, identical interface to real USDC/USDT0. Deployed by `DeployBase.s.sol` alongside the NFT contracts. No faucets needed.
+
+- Operator receives 500,000 USDC + 500,000 USDT0 at deploy time (for pool seeding)
+- Institution receives 100,000 USDC + 100,000 USDT0 at deploy time (for demo swaps and LP)
+
+Top up mid-demo:
+```bash
+cast send $USDC_ADDRESS "mint(address,uint256)" $INSTITUTION_ADDRESS 50000000000 \
+  --rpc-url $UNICHAIN_SEPOLIA_RPC --private-key $DEPLOYER_PRIVATE_KEY
+```
+
+ForkDemo integration tests continue using real mainnet USDC/USDT0 via `vm.createSelectFork`.
 
 ## Deployment
 
-### Step 1 — Base Sepolia: deploy MembershipNFT
+### Step 1 — Base Sepolia: deploy credentials + mock tokens
 
 ```bash
 source .env
@@ -145,9 +160,11 @@ forge script script/DeployBase.s.sol \
   -vvv
 ```
 
-Note the `MEMBERSHIP_NFT` address and set it in `.env`.
+Note `MEMBERSHIP_NFT`, `LP_MEMBERSHIP_NFT`, `USDC_ADDRESS`, `USDT0_ADDRESS` and set them in `.env`.
 
 ### Step 2 — Unichain Sepolia: deploy PermissionedCSMMHook
+
+Requires `USDC_ADDRESS` and `USDT0_ADDRESS` from Step 1.
 
 ```bash
 forge script script/DeployUnichain.s.sol \
