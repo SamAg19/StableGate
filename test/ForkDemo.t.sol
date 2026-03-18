@@ -395,4 +395,169 @@ contract ForkDemoTest is Test {
         _swapUsdcIn(institution, 600_000e6); // reverts — cumulative 1.2M > 1M cap
         console2.log("[ok] Bronze daily limit enforced: second 600k swap blocked at 1M cap");
     }
+
+    // ─── LP Access Control Scenarios ────────────────────────────────────────
+
+    function _expectAddLiquidityRevert(bytes memory innerError) internal {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeAddLiquidity.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+    }
+
+    function test_whitelistedLPCanAddLiquidity() public {
+        vm.selectFork(unichainForkId);
+        address lp = makeAddr("lp");
+
+        // Simulate RSC callback granting LP access
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToLPWhitelist(lp);
+        assertTrue(hook.isLPWhitelisted(lp));
+
+        // Fund LP and approve
+        deal(USDC, lp, 1_000_000e6);
+        deal(USDT0, lp, 1_000_000e6);
+        vm.startPrank(lp);
+        IERC20(USDC).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(USDT0).approve(address(modifyLiquidityRouter), type(uint256).max);
+
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887272, tickUpper: 887272, liquidityDelta: 1e10, salt: 0}),
+            abi.encode(lp)
+        );
+        vm.stopPrank();
+        console2.log("[ok] Whitelisted LP added liquidity successfully");
+    }
+
+    function test_nonWhitelistedLPBlocked() public {
+        vm.selectFork(unichainForkId);
+        address lp = makeAddr("lp");
+
+        _expectAddLiquidityRevert(
+            abi.encodeWithSelector(PermissionedCSMMHook.LPNotWhitelisted.selector, lp)
+        );
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887272, tickUpper: 887272, liquidityDelta: 1e10, salt: 0}),
+            abi.encode(lp)
+        );
+        console2.log("[ok] Non-whitelisted LP correctly blocked");
+    }
+
+    function test_revokedLPBlockedFromAddingMore() public {
+        vm.selectFork(unichainForkId);
+        address lp = makeAddr("lp");
+
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToLPWhitelist(lp);
+
+        deal(USDC, lp, 1_000_000e6);
+        deal(USDT0, lp, 1_000_000e6);
+        vm.startPrank(lp);
+        IERC20(USDC).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(USDT0).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887272, tickUpper: 887272, liquidityDelta: 1e10, salt: 0}),
+            abi.encode(lp)
+        );
+        vm.stopPrank();
+
+        // Simulate burn callback revoking LP access
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.removeFromLPWhitelist(lp);
+
+        // Second add reverts
+        vm.prank(lp);
+        _expectAddLiquidityRevert(
+            abi.encodeWithSelector(PermissionedCSMMHook.LPNotWhitelisted.selector, lp)
+        );
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887272, tickUpper: 887272, liquidityDelta: 1e10, salt: 0}),
+            abi.encode(lp)
+        );
+        console2.log("[ok] Revoked LP blocked from adding more liquidity");
+    }
+
+    function test_revokedLPExistingPositionIntact() public {
+        vm.selectFork(unichainForkId);
+        address lp = makeAddr("lp");
+
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToLPWhitelist(lp);
+
+        deal(USDC, lp, 1_000_000e6);
+        deal(USDT0, lp, 1_000_000e6);
+        vm.startPrank(lp);
+        IERC20(USDC).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(USDT0).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887272, tickUpper: 887272, liquidityDelta: 1e10, salt: 0}),
+            abi.encode(lp)
+        );
+        vm.stopPrank();
+
+        uint256 pmBalUsdc  = IERC20(USDC).balanceOf(address(POOL_MANAGER));
+        uint256 pmBalUsdt0 = IERC20(USDT0).balanceOf(address(POOL_MANAGER));
+
+        // Revoke — should NOT change pool reserves
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.removeFromLPWhitelist(lp);
+
+        assertEq(IERC20(USDC).balanceOf(address(POOL_MANAGER)), pmBalUsdc, "USDC reserves unchanged");
+        assertEq(IERC20(USDT0).balanceOf(address(POOL_MANAGER)), pmBalUsdt0, "USDT0 reserves unchanged");
+        console2.log("[ok] Existing LP position intact after revocation");
+    }
+
+    function test_tradingAndLPAccessIndependent() public {
+        vm.selectFork(unichainForkId);
+
+        // Institution has BOTH trading and LP credentials
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToAllowlistReactive(address(0), institution);
+        vm.prank(owner);
+        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.addToLPWhitelist(institution);
+
+        // Both swap and LP work
+        _swapUsdcIn(institution, 1_000e6);
+
+        deal(USDC, institution, 1_000_000e6);
+        deal(USDT0, institution, 1_000_000e6);
+        vm.startPrank(institution);
+        IERC20(USDC).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(USDT0).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887272, tickUpper: 887272, liquidityDelta: 1e10, salt: 0}),
+            abi.encode(institution)
+        );
+        vm.stopPrank();
+
+        // Revoke LP only — swap still works, LP blocked
+        vm.prank(REACTIVE_CALLBACK_PROXY);
+        hook.removeFromLPWhitelist(institution);
+
+        _swapUsdcIn(institution, 1_000e6); // swap still works
+
+        vm.prank(institution);
+        _expectAddLiquidityRevert(
+            abi.encodeWithSelector(PermissionedCSMMHook.LPNotWhitelisted.selector, institution)
+        );
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -887272, tickUpper: 887272, liquidityDelta: 1e10, salt: 0}),
+            abi.encode(institution)
+        );
+        console2.log("[ok] Trading and LP access are independent - swap works after LP revocation");
+    }
 }
