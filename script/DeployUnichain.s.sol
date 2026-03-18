@@ -22,9 +22,6 @@ contract DeployUnichain is Script {
     // Unichain Sepolia PoolManager address
     IPoolManager constant POOL_MANAGER = IPoolManager(0xC81462Fec8B23319F288047f8A03A57682a35C1A);
 
-    // Reactive Network Callback Proxy on Unichain Sepolia
-    address constant REACTIVE_CALLBACK_PROXY = 0x9299472A6399Fd1027ebF067571Eb3e3D7837FC4;
-
     uint160 constant FLAGS = uint160(
         Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
     );
@@ -59,7 +56,7 @@ contract DeployUnichain is Script {
         console2.log("=== Unichain Sepolia Deployment ===");
         console2.log("PermissionedCSMMHook:", address(hook));
         console2.log("PoolManager:         ", address(POOL_MANAGER));
-        console2.log("ReactiveProxy:       ", REACTIVE_CALLBACK_PROXY);
+        console2.log("CallbackProxy:       ", hook.CALLBACK_PROXY());
         console2.log("Owner (deployer):    ", deployer);
         console2.log("");
         console2.log("Fee schedule:");
