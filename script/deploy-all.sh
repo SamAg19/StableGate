@@ -7,8 +7,7 @@
 # Prerequisites:
 #   - .env filled with DEPLOYER_ADDRESS, DEPLOYER_PRIVATE_KEY, INSTITUTION_BRONZE/SILVER/GOLD
 #   - Operator funded with ETH on Base Sepolia + Unichain Sepolia + lREACT on Reactive Lasna
-#   - forge build completed
-set -euo pipefail
+set -uo pipefail
 
 # ── Load .env (strip comments, blank lines, and export all vars) ─────────────
 if [ -f .env ]; then
@@ -24,12 +23,35 @@ fi
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
+YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
 log()  { echo -e "${CYAN}${BOLD}[deploy]${NC} $1"; }
 ok()   { echo -e "${GREEN}  ✓${NC} $1"; }
+warn() { echo -e "${YELLOW}  !${NC} $1"; }
 fail() { echo -e "${RED}  ✗ $1${NC}"; exit 1; }
+
+# Run a forge script, show output on failure, return output on success
+run_forge() {
+  local label="$1"
+  shift
+  local tmpfile
+  tmpfile=$(mktemp)
+
+  if forge script "$@" 2>&1 | tee "$tmpfile"; then
+    LAST_OUTPUT=$(cat "$tmpfile")
+    rm -f "$tmpfile"
+    return 0
+  else
+    echo ""
+    echo -e "${RED}${BOLD}forge script failed for: ${label}${NC}"
+    echo -e "${RED}Output:${NC}"
+    cat "$tmpfile"
+    rm -f "$tmpfile"
+    exit 1
+  fi
+}
 
 # ── Validate env ─────────────────────────────────────────────────────────────
 
@@ -53,15 +75,15 @@ ok "forge build complete"
 
 log "Step 1/3: Deploying to Base Sepolia (MembershipNFT + LPMembershipNFT)..."
 
-BASE_OUTPUT=$(forge script script/DeployBase.s.sol \
+run_forge "DeployBase" script/DeployBase.s.sol \
   --rpc-url "$BASE_SEPOLIA_RPC" \
   --broadcast \
   --private-key "$DEPLOYER_PRIVATE_KEY" \
-  -vvv 2>&1)
+  -vvv
 
 # Extract addresses from forge output
-MEMBERSHIP_NFT=$(echo "$BASE_OUTPUT" | grep "MEMBERSHIP_NFT=" | head -1 | sed 's/.*MEMBERSHIP_NFT= *//' | tr -d '[:space:]')
-LP_MEMBERSHIP_NFT=$(echo "$BASE_OUTPUT" | grep "LP_MEMBERSHIP_NFT=" | head -1 | sed 's/.*LP_MEMBERSHIP_NFT= *//' | tr -d '[:space:]')
+MEMBERSHIP_NFT=$(echo "$LAST_OUTPUT" | grep "MEMBERSHIP_NFT=" | head -1 | sed 's/.*MEMBERSHIP_NFT= *//' | tr -d '[:space:]')
+LP_MEMBERSHIP_NFT=$(echo "$LAST_OUTPUT" | grep "LP_MEMBERSHIP_NFT=" | head -1 | sed 's/.*LP_MEMBERSHIP_NFT= *//' | tr -d '[:space:]')
 
 [ -z "$MEMBERSHIP_NFT" ] && fail "Failed to extract MEMBERSHIP_NFT address from deploy output"
 [ -z "$LP_MEMBERSHIP_NFT" ] && fail "Failed to extract LP_MEMBERSHIP_NFT address from deploy output"
@@ -73,19 +95,21 @@ ok "LPMembershipNFT:  $LP_MEMBERSHIP_NFT"
 export MEMBERSHIP_NFT
 export LP_MEMBERSHIP_NFT
 
+echo ""
+
 # ── Step 2: Unichain Sepolia ────────────────────────────────────────────────
 
 log "Step 2/3: Deploying to Unichain Sepolia (MockTokens + Hook + Pool + Liquidity)..."
 
-UNICHAIN_OUTPUT=$(forge script script/DeployUnichain.s.sol \
+run_forge "DeployUnichain" script/DeployUnichain.s.sol \
   --rpc-url "$UNICHAIN_SEPOLIA_RPC" \
   --broadcast \
   --private-key "$DEPLOYER_PRIVATE_KEY" \
-  -vvv 2>&1)
+  -vvv
 
-USDC_ADDRESS=$(echo "$UNICHAIN_OUTPUT" | grep "USDC_ADDRESS=" | head -1 | sed 's/.*USDC_ADDRESS= *//' | tr -d '[:space:]')
-USDT0_ADDRESS=$(echo "$UNICHAIN_OUTPUT" | grep "USDT0_ADDRESS=" | head -1 | sed 's/.*USDT0_ADDRESS= *//' | tr -d '[:space:]')
-HOOK_CONTRACT=$(echo "$UNICHAIN_OUTPUT" | grep "HOOK_CONTRACT=" | head -1 | sed 's/.*HOOK_CONTRACT= *//' | tr -d '[:space:]')
+USDC_ADDRESS=$(echo "$LAST_OUTPUT" | grep "USDC_ADDRESS=" | head -1 | sed 's/.*USDC_ADDRESS= *//' | tr -d '[:space:]')
+USDT0_ADDRESS=$(echo "$LAST_OUTPUT" | grep "USDT0_ADDRESS=" | head -1 | sed 's/.*USDT0_ADDRESS= *//' | tr -d '[:space:]')
+HOOK_CONTRACT=$(echo "$LAST_OUTPUT" | grep "HOOK_CONTRACT=" | head -1 | sed 's/.*HOOK_CONTRACT= *//' | tr -d '[:space:]')
 
 [ -z "$USDC_ADDRESS" ] && fail "Failed to extract USDC_ADDRESS from deploy output"
 [ -z "$USDT0_ADDRESS" ] && fail "Failed to extract USDT0_ADDRESS from deploy output"
@@ -99,25 +123,28 @@ export USDC_ADDRESS
 export USDT0_ADDRESS
 export HOOK_CONTRACT
 
+echo ""
+
 # ── Step 3: Reactive Lasna ──────────────────────────────────────────────────
 
 log "Step 3/3: Deploying to Reactive Lasna (AllowlistReactiveContract)..."
 
-REACTIVE_OUTPUT=$(forge script script/DeployReactive.s.sol \
+run_forge "DeployReactive" script/DeployReactive.s.sol \
   --rpc-url "$REACTIVE_LASNA_RPC" \
   --broadcast \
   --private-key "$DEPLOYER_PRIVATE_KEY" \
-  -vvv 2>&1)
+  -vvv
 
-ALLOWLIST_REACTIVE_CONTRACT=$(echo "$REACTIVE_OUTPUT" | grep "AllowlistReactiveContract:" | head -1 | sed 's/.*AllowlistReactiveContract: *//' | tr -d '[:space:]')
+ALLOWLIST_REACTIVE_CONTRACT=$(echo "$LAST_OUTPUT" | grep "AllowlistReactiveContract:" | head -1 | sed 's/.*AllowlistReactiveContract: *//' | tr -d '[:space:]')
 
 [ -z "$ALLOWLIST_REACTIVE_CONTRACT" ] && fail "Failed to extract AllowlistReactiveContract address from deploy output"
 
 ok "AllowlistRSC:     $ALLOWLIST_REACTIVE_CONTRACT"
 
+echo ""
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
-echo ""
 echo -e "${GREEN}${BOLD}═══ All 3 chains deployed successfully ═══${NC}"
 echo ""
 echo "Copy these into your .env and demo/.env:"
