@@ -1,0 +1,24 @@
+{
+  "name": "stablegate-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "demo": "tsx src/index.ts",
+    "demo:trading": "tsx src/index.ts --only=trading",
+    "demo:lp": "tsx src/index.ts --only=lp",
+    "demo:revoke": "tsx src/index.ts --only=revoke",
+    "extract-abis": "bash scripts/extract-abis.sh"
+  },
+  "dependencies": {
+    "viem": "^2.x",
+    "dotenv": "^16.x",
+    "ora": "^8.x",
+    "chalk": "^5.x",
+    "cli-table3": "^0.6.x"
+  },
+  "devDependencies": {
+    "typescript": "^5.x",
+    "tsx": "^4.x",
+    "@types/node": "^20.x"
+  }
+}
