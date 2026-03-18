@@ -45,6 +45,8 @@ contract ForkDemoTest is Test {
     using PoolIdLibrary for PoolKey;
 
     // ─── Unichain mainnet addresses ───────────────────────────────────────────
+    // ForkDemo always uses real mainnet USDC and USDT0 via vm.createSelectFork.
+    // MockUSDC and MockUSDT0 are testnet-only and must never appear here.
 
     IPoolManager constant POOL_MANAGER = IPoolManager(0x1F98400000000000000000000000000000000004);
     address constant USDC  = 0x078D782b760474a361dDA0AF3839290b0EF57AD6;
