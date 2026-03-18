@@ -69,8 +69,38 @@ export const CONTRACTS = {
   }
 } as const
 
-export const OPERATOR_ADDRESS    = requireEnv('OPERATOR_ADDRESS')
-export const INSTITUTION_ADDRESS = requireEnv('INSTITUTION_ADDRESS')
+export const OPERATOR_ADDRESS = requireEnv('OPERATOR_ADDRESS')
+
+// Three institutions — one per tier
+export const INSTITUTIONS = {
+  bronze: {
+    address: requireEnv('INSTITUTION_BRONZE_ADDRESS'),
+    privateKey: requireEnv('INSTITUTION_BRONZE_PRIVATE_KEY'),
+    tier: 0 as const,
+    tierName: 'Bronze' as const,
+  },
+  silver: {
+    address: requireEnv('INSTITUTION_SILVER_ADDRESS'),
+    privateKey: requireEnv('INSTITUTION_SILVER_PRIVATE_KEY'),
+    tier: 1 as const,
+    tierName: 'Silver' as const,
+  },
+  gold: {
+    address: requireEnv('INSTITUTION_GOLD_ADDRESS'),
+    privateKey: requireEnv('INSTITUTION_GOLD_PRIVATE_KEY'),
+    tier: 2 as const,
+    tierName: 'Gold' as const,
+  },
+} as const
+
+export type TierKey = keyof typeof INSTITUTIONS
+
+// Default institution used when --tier is not specified
+export const DEFAULT_TIER: TierKey = 'silver'
+
+export function getInstitution(tier?: TierKey) {
+  return INSTITUTIONS[tier ?? DEFAULT_TIER]
+}
 
 // ── Reactscan helpers ──────────────────────────────────────────────────────
 

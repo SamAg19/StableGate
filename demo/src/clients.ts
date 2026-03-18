@@ -1,7 +1,7 @@
-import { createPublicClient, createWalletClient, http } from 'viem'
+import { createPublicClient, createWalletClient, http, type WalletClient, type Transport, type Chain, type Account } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { baseSepolia } from 'viem/chains'
-import { unichainSepolia, reactiveLasna } from './config.js'
+import { unichainSepolia, reactiveLasna, INSTITUTIONS, type TierKey } from './config.js'
 
 function requireKey(key: string): `0x${string}` {
   const val = process.env[key]
@@ -9,8 +9,7 @@ function requireKey(key: string): `0x${string}` {
   return val as `0x${string}`
 }
 
-const operatorAccount    = privateKeyToAccount(requireKey('OPERATOR_PRIVATE_KEY'))
-const institutionAccount = privateKeyToAccount(requireKey('INSTITUTION_PRIVATE_KEY'))
+const operatorAccount = privateKeyToAccount(requireKey('OPERATOR_PRIVATE_KEY'))
 
 // ── Public clients — read-only ─────────────────────────────────────────────
 
@@ -22,6 +21,28 @@ export const reactivePublic = createPublicClient({ chain: reactiveLasna,   trans
 
 // ── Wallet clients — write ─────────────────────────────────────────────────
 
-export const baseOperator        = createWalletClient({ account: operatorAccount,    chain: baseSepolia,     transport: http() })
-export const unichainOperator    = createWalletClient({ account: operatorAccount,    chain: unichainSepolia, transport: http() })
-export const unichainInstitution = createWalletClient({ account: institutionAccount, chain: unichainSepolia, transport: http() })
+export const baseOperator     = createWalletClient({ account: operatorAccount, chain: baseSepolia,     transport: http() })
+export const unichainOperator = createWalletClient({ account: operatorAccount, chain: unichainSepolia, transport: http() })
+
+// Institution wallet clients — one per tier
+const institutionClients: Record<TierKey, WalletClient<Transport, Chain, Account>> = {
+  bronze: createWalletClient({
+    account: privateKeyToAccount(INSTITUTIONS.bronze.privateKey),
+    chain: unichainSepolia,
+    transport: http(),
+  }),
+  silver: createWalletClient({
+    account: privateKeyToAccount(INSTITUTIONS.silver.privateKey),
+    chain: unichainSepolia,
+    transport: http(),
+  }),
+  gold: createWalletClient({
+    account: privateKeyToAccount(INSTITUTIONS.gold.privateKey),
+    chain: unichainSepolia,
+    transport: http(),
+  }),
+}
+
+export function getInstitutionClient(tier: TierKey) {
+  return institutionClients[tier]
+}

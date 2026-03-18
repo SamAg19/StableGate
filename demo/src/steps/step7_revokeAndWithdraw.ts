@@ -1,6 +1,6 @@
 import { formatUnits, type Abi } from 'viem'
 import { baseOperator, basePublic, unichainOperator, unichainPublic } from '../clients.js'
-import { CONTRACTS, INSTITUTION_ADDRESS, OPERATOR_ADDRESS } from '../config.js'
+import { CONTRACTS, OPERATOR_ADDRESS, type TierKey, getInstitution } from '../config.js'
 import { step, info, success, warn, txLink, reactscanLink, stateTable, sectionDivider } from '../logger.js'
 import { pollUntil } from '../poller.js'
 import { getTokenId, getLPTokenId, readReserves } from '../utils.js'
@@ -8,14 +8,15 @@ import MembershipNFTABI    from '../../abis/MembershipNFT.json' assert { type: '
 import LPMembershipNFTABI  from '../../abis/LPMembershipNFT.json' assert { type: 'json' }
 import HookABI             from '../../abis/PermissionedCSMMHook.json' assert { type: 'json' }
 
-export async function revokeAndWithdraw() {
-  step(7, 'Revoking credentials + operator fee withdrawal')
+export async function revokeAndWithdraw(tier: TierKey) {
+  const inst = getInstitution(tier)
+  step(7, `Revoking credentials (${inst.tierName}) + operator fee withdrawal`)
 
   // ── 7a: Revoke trading credential ──────────────────────────────────────
   sectionDivider()
-  info('7a — Burning MembershipNFT on Base Sepolia...')
+  info(`7a — Burning MembershipNFT for ${inst.tierName} institution on Base Sepolia...`)
 
-  const tokenId = await getTokenId(INSTITUTION_ADDRESS)
+  const tokenId = await getTokenId(inst.address)
   const revokeHash = await baseOperator.writeContract({
     address: CONTRACTS.base.membershipNFT,
     abi: MembershipNFTABI as Abi,
@@ -33,30 +34,28 @@ export async function revokeAndWithdraw() {
   // Poll until all four fields are cleared — confirms atomic cleanup
   const tradingRevoked = await pollUntil(
     async () => {
-      const [allowlisted, tier, expiry, volume] = await Promise.all([
+      const [allowlisted, tierVal, expiry, volume] = await Promise.all([
         unichainPublic.readContract({
           address: CONTRACTS.unichain.hook, abi: HookABI as Abi,
-          functionName: 'isAllowlisted', args: [INSTITUTION_ADDRESS],
+          functionName: 'isAllowlisted', args: [inst.address],
         }),
         unichainPublic.readContract({
           address: CONTRACTS.unichain.hook, abi: HookABI as Abi,
-          functionName: 'institutionTier', args: [INSTITUTION_ADDRESS],
+          functionName: 'institutionTier', args: [inst.address],
         }),
         unichainPublic.readContract({
           address: CONTRACTS.unichain.hook, abi: HookABI as Abi,
-          functionName: 'institutionExpiry', args: [INSTITUTION_ADDRESS],
+          functionName: 'institutionExpiry', args: [inst.address],
         }),
         unichainPublic.readContract({
           address: CONTRACTS.unichain.hook, abi: HookABI as Abi,
-          functionName: 'dailyVolume', args: [INSTITUTION_ADDRESS],
+          functionName: 'dailyVolume', args: [inst.address],
         }),
       ])
-      // All four must be cleared:
-      // allowlisted = false, tier = 0 (Bronze default), expiry = 0, volume = 0
       return !(allowlisted as boolean)
-        && (tier as number)    === 0
-        && (expiry as bigint)  === 0n
-        && (volume as bigint)  === 0n
+        && (tierVal as number)  === 0
+        && (expiry as bigint)   === 0n
+        && (volume as bigint)   === 0n
     },
     {
       message:        'Waiting for auto-revocation + atomic state cleanup',
@@ -79,9 +78,9 @@ export async function revokeAndWithdraw() {
 
   // ── 7b: Revoke LP credential ────────────────────────────────────────────
   sectionDivider()
-  info('7b — Burning LPMembershipNFT on Base Sepolia...')
+  info(`7b — Burning LPMembershipNFT for ${inst.tierName} institution on Base Sepolia...`)
 
-  const lpTokenId = await getLPTokenId(INSTITUTION_ADDRESS)
+  const lpTokenId = await getLPTokenId(inst.address)
   const lpRevokeHash = await baseOperator.writeContract({
     address: CONTRACTS.base.lpMembershipNFT,
     abi: LPMembershipNFTABI as Abi,
@@ -98,7 +97,7 @@ export async function revokeAndWithdraw() {
     async () => {
       const whitelisted = await unichainPublic.readContract({
         address: CONTRACTS.unichain.hook, abi: HookABI as Abi,
-        functionName: 'isLPWhitelisted', args: [INSTITUTION_ADDRESS],
+        functionName: 'isLPWhitelisted', args: [inst.address],
       })
       return !(whitelisted as boolean)
     },

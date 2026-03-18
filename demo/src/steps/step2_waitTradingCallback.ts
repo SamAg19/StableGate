@@ -1,16 +1,17 @@
 import { type Abi } from 'viem'
 import { unichainPublic } from '../clients.js'
-import { CONTRACTS, INSTITUTION_ADDRESS } from '../config.js'
+import { CONTRACTS, type TierKey, getInstitution } from '../config.js'
 import { step, info, reactscanLink, stateTable } from '../logger.js'
 import { pollUntil } from '../poller.js'
 import HookABI from '../../abis/PermissionedCSMMHook.json' assert { type: 'json' }
 
-export async function waitForTradingCallback() {
-  step(2, 'Waiting for Reactive Network callbacks — Unichain Sepolia')
+export async function waitForTradingCallback(tier: TierKey) {
+  const inst = getInstitution(tier)
+  step(2, `Waiting for Reactive Network callbacks (${inst.tierName} tier) — Unichain Sepolia`)
 
   info('AllowlistReactiveContract on Reactive Lasna detected:')
   info('  Transfer(0x0 -> institution)  ->  addToAllowlistReactive()')
-  info('  TierUpdated(institution, 1)   ->  setInstitutionTier()')
+  info(`  TierUpdated(institution, ${inst.tier})   ->  setInstitutionTier()`)
   info('  ExpirySet(institution, ts)    ->  setInstitutionExpiry()')
 
   // Print Reactscan link immediately — presenter opens this in browser
@@ -22,34 +23,32 @@ export async function waitForTradingCallback() {
   // Poll until ALL THREE callbacks have landed on the hook
   const arrived = await pollUntil(
     async () => {
-      const [allowlisted, tier, expiry] = await Promise.all([
+      const [allowlisted, tierValue, expiry] = await Promise.all([
         unichainPublic.readContract({
           address: CONTRACTS.unichain.hook,
           abi: HookABI as Abi,
           functionName: 'isAllowlisted',
-          args: [INSTITUTION_ADDRESS],
+          args: [inst.address],
         }),
         unichainPublic.readContract({
           address: CONTRACTS.unichain.hook,
           abi: HookABI as Abi,
           functionName: 'institutionTier',
-          args: [INSTITUTION_ADDRESS],
+          args: [inst.address],
         }),
         unichainPublic.readContract({
           address: CONTRACTS.unichain.hook,
           abi: HookABI as Abi,
           functionName: 'institutionExpiry',
-          args: [INSTITUTION_ADDRESS],
+          args: [inst.address],
         }),
       ])
 
-      const isAllowlisted = allowlisted as boolean
-      const tierValue     = tier as number
-      const expiryValue   = expiry as bigint
-
       // All three must be set:
-      // allowlist = true, tier = 1 (Silver), expiry > 0
-      return isAllowlisted && tierValue === 1 && expiryValue > 0n
+      // allowlist = true, tier matches expected, expiry > 0
+      return (allowlisted as boolean)
+        && (tierValue as number) === inst.tier
+        && (expiry as bigint) > 0n
     },
     {
       message:        'Waiting for 3 RSC callbacks to land on Unichain Sepolia',
@@ -62,11 +61,17 @@ export async function waitForTradingCallback() {
 
   if (!arrived) process.exit(1)
 
+  const dailyLimits: Record<number, string> = {
+    0: '1,000,000 USDC (Bronze)',
+    1: '5,000,000 USDC (Silver)',
+    2: 'Unlimited (Gold)',
+  }
+
   stateTable('Hook state on Unichain Sepolia (post-callback)', [
     ['isAllowlisted',     'true'],
-    ['institutionTier',   'Silver (1) — set by RSC callback'],
+    ['institutionTier',   `${inst.tierName} (${inst.tier}) — set by RSC callback`],
     ['institutionExpiry', 'set — forwarded from Base Sepolia by RSC'],
-    ['dailyLimit',        '5,000,000 USDC (derived from Silver tier)'],
+    ['dailyLimit',        dailyLimits[inst.tier] ?? 'unknown'],
     ['Callbacks received', '3 / 3'],
   ])
 }

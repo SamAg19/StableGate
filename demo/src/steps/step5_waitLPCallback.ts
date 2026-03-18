@@ -1,11 +1,12 @@
 import { type Abi } from 'viem'
 import { unichainPublic } from '../clients.js'
-import { CONTRACTS, INSTITUTION_ADDRESS } from '../config.js'
+import { CONTRACTS, type TierKey, getInstitution } from '../config.js'
 import { step, info, reactscanLink, stateTable } from '../logger.js'
 import { pollUntil } from '../poller.js'
 import HookABI from '../../abis/PermissionedCSMMHook.json' assert { type: 'json' }
 
-export async function waitForLPCallback() {
+export async function waitForLPCallback(tier: TierKey) {
+  const inst = getInstitution(tier)
   step(5, 'Waiting for LP RSC callback — Unichain Sepolia')
 
   info('AllowlistReactiveContract detected Transfer from LPMembershipNFT:')
@@ -22,7 +23,7 @@ export async function waitForLPCallback() {
         address: CONTRACTS.unichain.hook,
         abi: HookABI as Abi,
         functionName: 'isLPWhitelisted',
-        args: [INSTITUTION_ADDRESS],
+        args: [inst.address],
       })
       return whitelisted as boolean
     },
@@ -39,6 +40,7 @@ export async function waitForLPCallback() {
 
   stateTable('Hook state after LP callback', [
     ['isLPWhitelisted',  'true'],
+    ['Institution',      inst.address],
     ['Callbacks received', '1 / 1'],
     ['Source',           'Reactive Network (Base Sepolia -> Unichain Sepolia)'],
     ['Routing key',      'log._contract == LP_MEMBERSHIP_NFT'],

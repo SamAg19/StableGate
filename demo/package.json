@@ -7,6 +7,9 @@
     "demo:trading": "tsx src/index.ts --only=trading",
     "demo:lp": "tsx src/index.ts --only=lp",
     "demo:revoke": "tsx src/index.ts --only=revoke",
+    "demo:bronze": "tsx src/index.ts --tier=bronze",
+    "demo:silver": "tsx src/index.ts --tier=silver",
+    "demo:gold": "tsx src/index.ts --tier=gold",
     "extract-abis": "bash scripts/extract-abis.sh"
   },
   "dependencies": {

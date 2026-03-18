@@ -1,12 +1,12 @@
-import { encodeAbiParameters, parseAbiParameters, type Abi } from 'viem'
-import { unichainInstitution, unichainPublic, basePublic } from './clients.js'
-import { CONTRACTS, INSTITUTION_ADDRESS } from './config.js'
+import { encodeAbiParameters, parseAbiParameters, type Abi, type WalletClient, type Transport, type Chain, type Account } from 'viem'
+import { unichainPublic, basePublic } from './clients.js'
+import { CONTRACTS } from './config.js'
 import MembershipNFTABI from '../abis/MembershipNFT.json' assert { type: 'json' }
 import LPMembershipNFTABI from '../abis/LPMembershipNFT.json' assert { type: 'json' }
 
 // ── ERC20 helpers ──────────────────────────────────────────────────────────
 
-const ERC20_ABI = [
+export const ERC20_ABI = [
   {
     name: 'approve',
     type: 'function',
@@ -27,11 +27,12 @@ const ERC20_ABI = [
 ] as const satisfies Abi
 
 export async function approveToken(
+  client: WalletClient<Transport, Chain, Account>,
   token: `0x${string}`,
   spender: `0x${string}`,
   amount: bigint
 ): Promise<void> {
-  const hash = await unichainInstitution.writeContract({
+  const hash = await client.writeContract({
     address: token,
     abi: ERC20_ABI,
     functionName: 'approve',
@@ -40,19 +41,19 @@ export async function approveToken(
   await unichainPublic.waitForTransactionReceipt({ hash })
 }
 
-export async function readBalances(): Promise<[bigint, bigint]> {
+export async function readBalances(account: `0x${string}`): Promise<[bigint, bigint]> {
   const [usdc, usdt0] = await Promise.all([
     unichainPublic.readContract({
       address: CONTRACTS.unichain.usdc,
       abi: ERC20_ABI,
       functionName: 'balanceOf',
-      args: [INSTITUTION_ADDRESS],
+      args: [account],
     }),
     unichainPublic.readContract({
       address: CONTRACTS.unichain.usdt0,
       abi: ERC20_ABI,
       functionName: 'balanceOf',
-      args: [INSTITUTION_ADDRESS],
+      args: [account],
     }),
   ])
   return [usdc, usdt0]
@@ -82,7 +83,7 @@ export async function readReserves(): Promise<[bigint, bigint]> {
 
 // ── Token ID helpers ───────────────────────────────────────────────────────
 
-export async function getTokenId(institution: `0x${string}`): Promise<bigint> {
+export async function getTokenId(_institution: `0x${string}`): Promise<bigint> {
   // The most recently minted token ID is nextTokenId - 1
   const nextId = await basePublic.readContract({
     address: CONTRACTS.base.membershipNFT,
@@ -93,7 +94,7 @@ export async function getTokenId(institution: `0x${string}`): Promise<bigint> {
   return nextId - 1n
 }
 
-export async function getLPTokenId(institution: `0x${string}`): Promise<bigint> {
+export async function getLPTokenId(_institution: `0x${string}`): Promise<bigint> {
   const nextId = await basePublic.readContract({
     address: CONTRACTS.base.lpMembershipNFT,
     abi: LPMembershipNFTABI as Abi,
