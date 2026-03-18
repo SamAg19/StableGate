@@ -40,15 +40,13 @@ contract DeployUnichain is Script {
             deployer,
             FLAGS,
             type(PermissionedCSMMHook).creationCode,
-            abi.encode(address(POOL_MANAGER), REACTIVE_CALLBACK_PROXY, REACTIVE_CALLBACK_PROXY, deployer)
+            abi.encode(address(POOL_MANAGER), deployer)
         );
 
         vm.startBroadcast();
 
         PermissionedCSMMHook hook = new PermissionedCSMMHook{salt: salt}(
             POOL_MANAGER,
-            REACTIVE_CALLBACK_PROXY,
-            REACTIVE_CALLBACK_PROXY, // lpReactiveCallbackProxy — same proxy for now
             deployer // feeRecipient defaults to deployer
         );
         require(address(hook) == hookAddr, "hook address mismatch");

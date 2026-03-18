@@ -112,13 +112,14 @@ contract ForkDemoTest is Test {
             address(this),
             FLAGS,
             type(PermissionedCSMMHook).creationCode,
-            abi.encode(address(POOL_MANAGER), REACTIVE_CALLBACK_PROXY, REACTIVE_CALLBACK_PROXY, owner)
+            abi.encode(address(POOL_MANAGER), owner)
         );
-        hook = new PermissionedCSMMHook{salt: salt}(POOL_MANAGER, REACTIVE_CALLBACK_PROXY, REACTIVE_CALLBACK_PROXY, owner);
+        hook = new PermissionedCSMMHook{salt: salt}(POOL_MANAGER, owner);
         require(address(hook) == hookAddr, "hook address mismatch");
 
-        // Whitelist the modifyLiquidityRouter so setUp liquidity additions pass beforeAddLiquidity
-        hook.addToLPWhitelist(address(modifyLiquidityRouter));
+        // Whitelist the modifyLiquidityRouter so setUp liquidity additions pass beforeAddLiquidity.
+        // rvm_id = address(this) since this test contract is the deployer.
+        hook.addToLPWhitelist(address(this), address(modifyLiquidityRouter));
 
         hook.transferOwnership(owner);
         console2.log("[setup] PermissionedCSMMHook deployed on Unichain fork:", address(hook));
@@ -236,14 +237,13 @@ contract ForkDemoTest is Test {
         // Step 4 — Simulate Reactive Network delivering the callback to Unichain.
         // In production: Reactive Network detects the Callback event above and sends a
         // transaction from REACTIVE_CALLBACK_PROXY to hook.addToAllowlistReactive().
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToAllowlistReactive(address(0), institution);
+        hook.addToAllowlistReactive(address(this), institution);
         assertTrue(hook.isAllowlisted(institution));
         console2.log("[ok] Reactive callback delivered: institution allowlisted on Unichain");
 
         // Set Gold tier so this base-flow test verifies 1:1 ratio (fee-testing is in separate tests)
         vm.prank(owner);
-        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
+        hook.setInstitutionTier(address(this), institution, IStableGate.Tier.Gold);
 
         // Step 5 — Execute CSMM swap on Unichain — 10,000 USDC → USDT0
         uint256 usdt0Before = IERC20(USDT0).balanceOf(address(this));
@@ -258,10 +258,9 @@ contract ForkDemoTest is Test {
     /// @notice Step 6: Reverse direction — USDT0 → USDC still 1:1 for Gold tier.
     function test_reverseSwap() public {
         vm.selectFork(unichainForkId);
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToAllowlistReactive(address(0), institution);
+        hook.addToAllowlistReactive(address(this), institution);
         vm.prank(owner);
-        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
+        hook.setInstitutionTier(address(this), institution, IStableGate.Tier.Gold);
 
         uint256 usdcBefore  = IERC20(USDC).balanceOf(address(this));
         uint256 usdt0Before = IERC20(USDT0).balanceOf(address(this));
@@ -288,12 +287,10 @@ contract ForkDemoTest is Test {
         vm.selectFork(unichainForkId);
 
         // Allowlist institution via simulated Reactive callback
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToAllowlistReactive(address(0), institution);
+        hook.addToAllowlistReactive(address(this), institution);
 
-        // Owner revokes access
-        vm.prank(owner);
-        hook.removeFromAllowlist(institution);
+        // Revoke access via rvmIdOnly
+        hook.removeFromAllowlistReactive(address(this), institution);
         assertFalse(hook.isAllowlisted(institution));
 
         // Attempt swap — should revert with SwapperNotAllowlisted
@@ -338,10 +335,9 @@ contract ForkDemoTest is Test {
     /// @notice Gold tier member swaps 10,000 USDC → exactly 10,000 USDT0 (zero fee).
     function test_goldTierZeroFeeSwap() public {
         vm.selectFork(unichainForkId);
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToAllowlistReactive(address(0), institution);
+        hook.addToAllowlistReactive(address(this), institution);
         vm.prank(owner);
-        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
+        hook.setInstitutionTier(address(this), institution, IStableGate.Tier.Gold);
 
         uint256 usdt0Before = IERC20(USDT0).balanceOf(address(this));
         _swapUsdcIn(institution, 10_000e6);
@@ -352,8 +348,7 @@ contract ForkDemoTest is Test {
     /// @notice Bronze tier (default) member has 3 bps deducted from output.
     function test_bronzeTierFeeDeducted() public {
         vm.selectFork(unichainForkId);
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToAllowlistReactive(address(0), institution);
+        hook.addToAllowlistReactive(address(this), institution);
 
         uint256 usdt0Before = IERC20(USDT0).balanceOf(address(this));
         _swapUsdcIn(institution, 10_000e6);
@@ -366,10 +361,9 @@ contract ForkDemoTest is Test {
     /// @notice Expired membership blocks the swap with MembershipExpired revert.
     function test_expiredMembershipBlocksSwap() public {
         vm.selectFork(unichainForkId);
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToAllowlistReactive(address(0), institution);
+        hook.addToAllowlistReactive(address(this), institution);
         vm.prank(owner);
-        hook.setInstitutionExpiry(institution, block.timestamp + 30 days);
+        hook.setInstitutionExpiry(address(this), institution, block.timestamp + 30 days);
         vm.warp(block.timestamp + 30 days + 1);
 
         _expectHookRevert(abi.encodeWithSelector(IStableGate.MembershipExpired.selector, institution));
@@ -380,8 +374,7 @@ contract ForkDemoTest is Test {
     /// @notice Bronze tier daily limit: first 600k passes, second 600k hits the 1M cap.
     function test_dailyLimitEnforced() public {
         vm.selectFork(unichainForkId);
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToAllowlistReactive(address(0), institution);
+        hook.addToAllowlistReactive(address(this), institution);
         // Bronze is the default tier — DAILY_LIMIT_BRONZE = 1_000_000e6
 
         _swapUsdcIn(institution, 600_000e6); // succeeds — 600k < 1M cap
@@ -415,8 +408,7 @@ contract ForkDemoTest is Test {
         address lp = makeAddr("lp");
 
         // Simulate RSC callback granting LP access
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToLPWhitelist(lp);
+        hook.addToLPWhitelist(address(this), lp);
         assertTrue(hook.isLPWhitelisted(lp));
 
         // Fund LP and approve
@@ -454,8 +446,7 @@ contract ForkDemoTest is Test {
         vm.selectFork(unichainForkId);
         address lp = makeAddr("lp");
 
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToLPWhitelist(lp);
+        hook.addToLPWhitelist(address(this), lp);
 
         deal(USDC, lp, 1_000_000e6);
         deal(USDT0, lp, 1_000_000e6);
@@ -470,8 +461,7 @@ contract ForkDemoTest is Test {
         vm.stopPrank();
 
         // Simulate burn callback revoking LP access
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.removeFromLPWhitelist(lp);
+        hook.removeFromLPWhitelist(address(this), lp);
 
         // Second add reverts
         vm.prank(lp);
@@ -490,8 +480,7 @@ contract ForkDemoTest is Test {
         vm.selectFork(unichainForkId);
         address lp = makeAddr("lp");
 
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToLPWhitelist(lp);
+        hook.addToLPWhitelist(address(this), lp);
 
         deal(USDC, lp, 1_000_000e6);
         deal(USDT0, lp, 1_000_000e6);
@@ -509,8 +498,7 @@ contract ForkDemoTest is Test {
         uint256 pmBalUsdt0 = IERC20(USDT0).balanceOf(address(POOL_MANAGER));
 
         // Revoke — should NOT change pool reserves
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.removeFromLPWhitelist(lp);
+        hook.removeFromLPWhitelist(address(this), lp);
 
         assertEq(IERC20(USDC).balanceOf(address(POOL_MANAGER)), pmBalUsdc, "USDC reserves unchanged");
         assertEq(IERC20(USDT0).balanceOf(address(POOL_MANAGER)), pmBalUsdt0, "USDT0 reserves unchanged");
@@ -521,12 +509,10 @@ contract ForkDemoTest is Test {
         vm.selectFork(unichainForkId);
 
         // Institution has BOTH trading and LP credentials
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToAllowlistReactive(address(0), institution);
+        hook.addToAllowlistReactive(address(this), institution);
         vm.prank(owner);
-        hook.setInstitutionTier(institution, IStableGate.Tier.Gold);
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.addToLPWhitelist(institution);
+        hook.setInstitutionTier(address(this), institution, IStableGate.Tier.Gold);
+        hook.addToLPWhitelist(address(this), institution);
 
         // Both swap and LP work
         _swapUsdcIn(institution, 1_000e6);
@@ -544,8 +530,7 @@ contract ForkDemoTest is Test {
         vm.stopPrank();
 
         // Revoke LP only — swap still works, LP blocked
-        vm.prank(REACTIVE_CALLBACK_PROXY);
-        hook.removeFromLPWhitelist(institution);
+        hook.removeFromLPWhitelist(address(this), institution);
 
         _swapUsdcIn(institution, 1_000e6); // swap still works
 

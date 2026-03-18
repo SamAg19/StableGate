@@ -31,8 +31,6 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     address institution1 = makeAddr("institution1");
     address institution2 = makeAddr("institution2");
     address unauthorized = makeAddr("unauthorized");
-    address reactiveProxy = makeAddr("reactiveProxy");
-    address lpReactiveProxy = makeAddr("lpReactiveProxy");
     address feeRecipientAddr = makeAddr("feeRecipient");
 
     uint160 constant FLAGS = uint160(
@@ -48,15 +46,15 @@ contract PermissionedCSMMHookTest is Test, Deployers {
             address(this),
             FLAGS,
             type(PermissionedCSMMHook).creationCode,
-            abi.encode(address(manager), reactiveProxy, lpReactiveProxy, feeRecipientAddr)
+            abi.encode(address(manager), feeRecipientAddr)
         );
 
-        hook = new PermissionedCSMMHook{salt: salt}(manager, reactiveProxy, lpReactiveProxy, feeRecipientAddr);
+        hook = new PermissionedCSMMHook{salt: salt}(manager, feeRecipientAddr);
         assertEq(address(hook), hookAddr);
 
         // Whitelist the modifyLiquidityRouter so setUp liquidity additions pass beforeAddLiquidity.
         // (sender == modifyLiquidityRouter when hookData is empty)
-        hook.addToLPWhitelist(address(modifyLiquidityRouter));
+        hook.addToLPWhitelist(address(this), address(modifyLiquidityRouter));
 
         // Transfer ownership to the designated owner address
         hook.transferOwnership(owner);
@@ -89,8 +87,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
 
         // Pre-set institution1 to Gold tier so all existing 1:1 swap assertions continue to pass.
         // New tier tests explicitly set the tier they need (Silver / Bronze / Gold).
-        vm.prank(owner);
-        hook.setInstitutionTier(institution1, IStableGate.Tier.Gold);
+        hook.setInstitutionTier(address(this), institution1, IStableGate.Tier.Gold);
     }
 
     // ─── Step 5: Allowlist management ────────────────────────────────────────
@@ -105,8 +102,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_reactiveProxyCanAddViaReactiveFunction() public {
         // Reactive Network delivers callbacks via addToAllowlistReactive(rvmId, account).
         // The proxy calls the two-arg variant; address(0) is the RVM ID placeholder.
-        vm.prank(reactiveProxy);
-        hook.addToAllowlistReactive(address(0), institution1);
+        hook.addToAllowlistReactive(address(this), institution1);
         assertTrue(hook.isAllowlisted(institution1));
     }
 
@@ -116,10 +112,9 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         hook.addToAllowlist(institution1);
     }
 
-    function test_revert_nonProxyCannotCallReactiveFunction() public {
-        vm.prank(unauthorized);
-        vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
-        hook.addToAllowlistReactive(address(0), institution1);
+    function test_revert_wrongRvmIdCannotCallReactiveFunction() public {
+        vm.expectRevert("Authorized RVM ID only");
+        hook.addToAllowlistReactive(unauthorized, institution1);
     }
 
     function test_revert_cannotAddZeroAddress() public {
@@ -141,19 +136,17 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         vm.prank(owner);
         hook.addToAllowlist(institution1);
 
-        vm.prank(owner);
-        hook.removeFromAllowlist(institution1);
+        hook.removeFromAllowlistReactive(address(this), institution1);
         assertFalse(hook.isAllowlisted(institution1));
         assertEq(hook.allowlistCount(), 0);
     }
 
-    function test_revert_nonOwnerCannotRemove() public {
+    function test_revert_wrongRvmIdCannotRemove() public {
         vm.prank(owner);
         hook.addToAllowlist(institution1);
 
-        vm.prank(unauthorized);
-        vm.expectRevert(PermissionedCSMMHook.NotOwner.selector);
-        hook.removeFromAllowlist(institution1);
+        vm.expectRevert("Authorized RVM ID only");
+        hook.removeFromAllowlistReactive(unauthorized, institution1);
     }
 
     function test_batchAdd() public {
@@ -169,22 +162,14 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         assertEq(hook.allowlistCount(), 2);
     }
 
-    function test_updateReactiveProxy() public {
-        address newProxy = makeAddr("newProxy");
-
-        vm.prank(owner);
-        hook.setReactiveCallbackProxy(newProxy);
-        assertEq(hook.reactiveCallbackProxy(), newProxy);
-
-        // Old proxy should now be rejected on the reactive path
-        vm.prank(reactiveProxy);
-        vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
-        hook.addToAllowlistReactive(address(0), institution1);
-
-        // New proxy is accepted on the reactive path
-        vm.prank(newProxy);
-        hook.addToAllowlistReactive(address(0), institution1);
+    function test_rvmIdOnlyAuthorizesDeployer() public {
+        // Correct rvm_id (deployer = address(this)) succeeds
+        hook.addToAllowlistReactive(address(this), institution1);
         assertTrue(hook.isAllowlisted(institution1));
+
+        // Wrong rvm_id is rejected
+        vm.expectRevert("Authorized RVM ID only");
+        hook.addToAllowlistReactive(makeAddr("wrongRvmId"), institution2);
     }
 
     function test_transferOwnership() public {
@@ -197,7 +182,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         // Old owner is blocked
         vm.prank(owner);
         vm.expectRevert(PermissionedCSMMHook.NotOwner.selector);
-        hook.removeFromAllowlist(institution1);
+        hook.addToAllowlist(institution1);
 
         // New owner can manage
         vm.prank(newOwner);
@@ -346,8 +331,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_silverTierFee() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Silver);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Silver);
 
         // Use 500_000e6 — within Silver cap of 5_000_000e6.
         // 1 bps = 100 ppm. fee = 500_000e6 * 100 / 1_000_000 = 50_000e6.
@@ -367,8 +351,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_bronzeTierFee() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         // Use 500_000e6 — within Bronze cap of 1_000_000e6.
         // 3 bps = 300 ppm. fee = 500_000e6 * 300 / 1_000_000 = 150_000e6.
@@ -386,8 +369,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_revert_expiredMembership() public {
         vm.prank(owner);
         hook.addToAllowlist(institution1);
-        vm.prank(owner);
-        hook.setInstitutionExpiry(institution1, block.timestamp + 30 days);
+        hook.setInstitutionExpiry(address(this), institution1,block.timestamp + 30 days);
 
         vm.warp(block.timestamp + 30 days + 1);
 
@@ -410,8 +392,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_notExpiredBeforeDeadline() public {
         vm.prank(owner);
         hook.addToAllowlist(institution1);
-        vm.prank(owner);
-        hook.setInstitutionExpiry(institution1, block.timestamp + 30 days);
+        hook.setInstitutionExpiry(address(this), institution1,block.timestamp + 30 days);
 
         vm.warp(block.timestamp + 30 days - 1);
 
@@ -422,28 +403,24 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     }
 
     function test_setTierByOwner() public {
-        vm.prank(owner);
-        hook.setInstitutionTier(institution1, IStableGate.Tier.Silver);
+        hook.setInstitutionTier(address(this), institution1, IStableGate.Tier.Silver);
         assertEq(uint8(hook.institutionTier(institution1)), uint8(IStableGate.Tier.Silver));
     }
 
-    function test_setTierByProxy() public {
-        vm.prank(reactiveProxy);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
+    function test_setTierViaRvmId() public {
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Gold);
         assertEq(uint8(hook.institutionTier(institution2)), uint8(IStableGate.Tier.Gold));
     }
 
     function test_revert_setTierUnauthorized() public {
-        vm.prank(unauthorized);
-        vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
-        hook.setInstitutionTier(institution1, IStableGate.Tier.Gold);
+        vm.expectRevert("Authorized RVM ID only");
+        hook.setInstitutionTier(unauthorized, institution1, IStableGate.Tier.Gold);
     }
 
     function test_tierUpgradeAffectsFee() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         // Use 500_000e6 — within Bronze cap of 1_000_000e6.
         uint256 amount = 500_000e6;
@@ -455,8 +432,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         assertEq(bronzeReceived, bronzeOut, "bronze fee applied");
 
         // Upgrade to Gold (unlimited, zero fee)
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Gold);
 
         uint256 bal1Before2 = currency1.balanceOf(address(this));
         swap(poolKey, true, -int256(amount), abi.encode(institution2));
@@ -470,8 +446,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_swapUnderLimit() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         // 500_000e6 < Bronze cap of 1_000_000e6 — succeeds with Bronze fee
         uint256 amount = 500_000e6;
@@ -485,8 +460,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_revert_swapOverLimit() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         // 2_000_000e6 > Bronze cap of 1_000_000e6 — reverts
         uint256 amount = 2_000_000e6;
@@ -511,8 +485,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_cumulativeVolumeTracked() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         // First swap of 600_000e6 succeeds (600k < 1M Bronze cap)
         swap(poolKey, true, -int256(600_000e6), abi.encode(institution2));
@@ -539,8 +512,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_resetAfterBlockWindow() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         // Swap exactly at cap: 0 + 1_000_000e6 > 1_000_000e6 is false → passes
         swap(poolKey, true, -int256(1_000_000e6), abi.encode(institution2));
@@ -557,8 +529,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         hook.addToAllowlist(institution1);
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
         // institution1 remains Gold (set in setUp) — unlimited
 
         // institution1 (Gold = unlimited) can swap large amounts
@@ -596,8 +567,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_tierUpgradeIncreasesLimit() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         uint256 amount = 2_000_000e6; // > Bronze cap (1M), < Silver cap (5M)
 
@@ -620,8 +590,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         swap(poolKey, true, -int256(amount), abi.encode(institution2));
 
         // Upgrade to Silver (5M cap) — same amount now succeeds
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Silver);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Silver);
 
         uint256 bal1Before = currency1.balanceOf(address(this));
         swap(poolKey, true, -int256(amount), abi.encode(institution2));
@@ -632,15 +601,13 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_tierDowngradeEnforcesLowerLimit() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Gold);
 
         // Gold: unlimited — 2M swap succeeds, volume accumulates
         swap(poolKey, true, -int256(2_000_000e6), abi.encode(institution2));
 
         // Downgrade to Bronze (1M cap)
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         // dailyVolume (2M) already exceeds Bronze cap (1M) — any further swap reverts
         bytes memory innerError = abi.encodeWithSelector(
@@ -668,8 +635,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         hook.addToAllowlist(institution1);
         // institution1 is already Gold (set in setUp)
 
-        vm.prank(owner);
-        hook.removeFromAllowlist(institution1);
+        hook.removeFromAllowlistReactive(address(this), institution1);
         // Tier reset to Bronze on revocation
         assertEq(uint8(hook.institutionTier(institution1)), uint8(IStableGate.Tier.Bronze));
 
@@ -682,12 +648,10 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_revokeWipesExpiry() public {
         vm.prank(owner);
         hook.addToAllowlist(institution1);
-        vm.prank(owner);
-        hook.setInstitutionExpiry(institution1, block.timestamp + 30 days);
+        hook.setInstitutionExpiry(address(this), institution1,block.timestamp + 30 days);
         assertGt(hook.institutionExpiry(institution1), 0);
 
-        vm.prank(owner);
-        hook.removeFromAllowlist(institution1);
+        hook.removeFromAllowlistReactive(address(this), institution1);
         assertEq(hook.institutionExpiry(institution1), 0);
 
         // Re-add — expiry is still 0 (clean slate)
@@ -699,23 +663,20 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_revokeWipesDailyVolume() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         // Swap near the Bronze cap
         swap(poolKey, true, -int256(900_000e6), abi.encode(institution2));
         assertGt(hook.dailyVolume(institution2), 0);
 
-        vm.prank(owner);
-        hook.removeFromAllowlist(institution2);
+        hook.removeFromAllowlistReactive(address(this), institution2);
         assertEq(hook.dailyVolume(institution2), 0);
         assertEq(hook.lastResetBlock(institution2), 0);
 
         // Re-add — full 1M cap is available again
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
         swap(poolKey, true, -int256(900_000e6), abi.encode(institution2)); // succeeds — fresh window
     }
 
@@ -726,17 +687,14 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         vm.expectEmit(true, false, false, false, address(hook));
         emit InstitutionStateCleared(institution1);
 
-        vm.prank(owner);
-        hook.removeFromAllowlist(institution1);
+        hook.removeFromAllowlistReactive(address(this), institution1);
     }
 
     function test_reOnboardingStartsFresh() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
-        vm.prank(owner);
-        hook.setInstitutionExpiry(institution2, block.timestamp + 365 days);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Gold);
+        hook.setInstitutionExpiry(address(this), institution2,block.timestamp + 365 days);
 
         // Swap as Gold — zero fee
         uint256 amount = 500_000e6;
@@ -745,8 +703,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         assertEq(currency1.balanceOf(address(this)) - bal1Before, amount, "Gold: no fee");
 
         // Revoke
-        vm.prank(owner);
-        hook.removeFromAllowlist(institution2);
+        hook.removeFromAllowlistReactive(address(this), institution2);
 
         // Re-onboard — no explicit tier/expiry set (RSC callbacks would follow in production)
         vm.prank(owner);
@@ -785,18 +742,15 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_revokeByProxyAlsoClears() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Gold);
-        vm.prank(owner);
-        hook.setInstitutionExpiry(institution2, block.timestamp + 90 days);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Gold);
+        hook.setInstitutionExpiry(address(this), institution2,block.timestamp + 90 days);
         swap(poolKey, true, -int256(2_000_000e6), abi.encode(institution2));
 
         // Reactive proxy revokes via removeFromAllowlistReactive
         vm.expectEmit(true, false, false, false, address(hook));
         emit InstitutionStateCleared(institution2);
 
-        vm.prank(reactiveProxy);
-        hook.removeFromAllowlistReactive(address(0), institution2);
+        hook.removeFromAllowlistReactive(address(this), institution2);
 
         assertFalse(hook.isAllowlisted(institution2));
         assertEq(uint8(hook.institutionTier(institution2)), uint8(IStableGate.Tier.Bronze));
@@ -816,8 +770,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_feeSplitDefaultFiftyFifty() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         uint256 amount = 10_000e6;
         (uint256 feeAmount, uint256 lpAmount, uint256 operatorAmount) = _bronzeSwapAndGetFee(amount);
@@ -837,8 +790,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
 
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         swap(poolKey, true, -int256(10_000e6), abi.encode(institution2));
 
@@ -851,8 +803,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
 
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         uint256 amount = 10_000e6;
         uint256 expectedFee = amount * 300 / 1_000_000;
@@ -868,8 +819,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
 
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         uint256 amount = 10_000e6;
         uint256 feeAmount = amount * 300 / 1_000_000;
@@ -898,8 +848,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_feesAccrueCumulatively() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         uint256 amount = 100_000e6;
         (, , uint256 operatorPerSwap) = _bronzeSwapAndGetFee(amount);
@@ -914,8 +863,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_withdrawFees() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         uint256 amount = 500_000e6;
         (, , uint256 operatorAmount) = _bronzeSwapAndGetFee(amount);
@@ -933,8 +881,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     function test_withdrawFeesEmitsEvent() public {
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         uint256 amount = 500_000e6;
         (, , uint256 operatorAmount) = _bronzeSwapAndGetFee(amount);
@@ -965,8 +912,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         // Accrue some fees first
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
         swap(poolKey, true, -int256(500_000e6), abi.encode(institution2));
 
         // Update recipient
@@ -1023,8 +969,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         // Execute Bronze swaps that generate LP fees via donate()
         vm.prank(owner);
         hook.addToAllowlist(institution2);
-        vm.prank(owner);
-        hook.setInstitutionTier(institution2, IStableGate.Tier.Bronze);
+        hook.setInstitutionTier(address(this), institution2, IStableGate.Tier.Bronze);
 
         for (uint256 i = 0; i < 3; i++) {
             swap(poolKey, true, -int256(100_000e6), abi.encode(institution2));
@@ -1055,64 +1000,53 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     event LPWhitelistUpdated(address indexed lp, bool added);
 
     function test_ownerCanAddToLPWhitelist() public {
-        vm.prank(owner);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
         assertTrue(hook.isLPWhitelisted(institution1));
         // modifyLiquidityRouter is already whitelisted in setUp, so count starts at 1
         assertEq(hook.lpWhitelistCount(), 2);
     }
 
     function test_lpProxyCanAddToLPWhitelist() public {
-        vm.prank(lpReactiveProxy);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
         assertTrue(hook.isLPWhitelisted(institution1));
     }
 
     function test_revert_unauthorizedCannotAddLP() public {
-        vm.prank(unauthorized);
-        vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
-        hook.addToLPWhitelist(institution1);
+        vm.expectRevert("Authorized RVM ID only");
+        hook.addToLPWhitelist(unauthorized, institution1);
     }
 
     function test_revert_cannotAddDuplicateLP() public {
-        vm.prank(owner);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
 
-        vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(PermissionedCSMMHook.LPAlreadyWhitelisted.selector, institution1));
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
     }
 
     function test_revert_cannotAddZeroAddressLP() public {
-        vm.prank(owner);
         vm.expectRevert(PermissionedCSMMHook.ZeroAddress.selector);
-        hook.addToLPWhitelist(address(0));
+        hook.addToLPWhitelist(address(this), address(0));
     }
 
     function test_ownerCanRemoveLP() public {
-        vm.prank(owner);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
         uint256 countBefore = hook.lpWhitelistCount();
 
-        vm.prank(owner);
-        hook.removeFromLPWhitelist(institution1);
+        hook.removeFromLPWhitelist(address(this), institution1);
         assertFalse(hook.isLPWhitelisted(institution1));
         assertEq(hook.lpWhitelistCount(), countBefore - 1);
     }
 
     function test_lpProxyCanRemoveLP() public {
-        vm.prank(owner);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
 
-        vm.prank(lpReactiveProxy);
-        hook.removeFromLPWhitelist(institution1);
+        hook.removeFromLPWhitelist(address(this), institution1);
         assertFalse(hook.isLPWhitelisted(institution1));
     }
 
     function test_revert_removeNonExistentLP() public {
-        vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(PermissionedCSMMHook.LPNotInWhitelist.selector, institution1));
-        hook.removeFromLPWhitelist(institution1);
+        hook.removeFromLPWhitelist(address(this), institution1);
     }
 
     // ─── beforeAddLiquidity Enforcement Tests ───────────────────────────────
@@ -1130,8 +1064,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     }
 
     function test_whitelistedLPCanAddLiquidity() public {
-        vm.prank(owner);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
 
         // Fund institution1 and approve
         currency0.transfer(institution1, 10e18);
@@ -1162,8 +1095,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     }
 
     function test_revokedLPBlockedFromAddingLiquidity() public {
-        vm.prank(owner);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
 
         currency0.transfer(institution1, 10e18);
         currency1.transfer(institution1, 10e18);
@@ -1180,8 +1112,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         vm.stopPrank();
 
         // Revoke LP access
-        vm.prank(owner);
-        hook.removeFromLPWhitelist(institution1);
+        hook.removeFromLPWhitelist(address(this), institution1);
 
         // Second add reverts
         vm.prank(institution1);
@@ -1196,8 +1127,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     }
 
     function test_revokedLPExistingPositionUntouched() public {
-        vm.prank(owner);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
 
         currency0.transfer(institution1, 10e18);
         currency1.transfer(institution1, 10e18);
@@ -1216,16 +1146,14 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         uint256 pmBal1 = currency1.balanceOf(address(manager));
 
         // Revoke — should NOT alter pool balances
-        vm.prank(owner);
-        hook.removeFromLPWhitelist(institution1);
+        hook.removeFromLPWhitelist(address(this), institution1);
 
         assertEq(currency0.balanceOf(address(manager)), pmBal0, "currency0 unchanged");
         assertEq(currency1.balanceOf(address(manager)), pmBal1, "currency1 unchanged");
     }
 
     function test_removeLiquidityStillAllowedAfterRevocation() public {
-        vm.prank(owner);
-        hook.addToLPWhitelist(institution1);
+        hook.addToLPWhitelist(address(this), institution1);
 
         currency0.transfer(institution1, 10e18);
         currency1.transfer(institution1, 10e18);
@@ -1240,8 +1168,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         vm.stopPrank();
 
         // Revoke LP access
-        vm.prank(owner);
-        hook.removeFromLPWhitelist(institution1);
+        hook.removeFromLPWhitelist(address(this), institution1);
 
         // Remove liquidity still works — beforeRemoveLiquidity is not hooked
         vm.prank(institution1);
@@ -1275,8 +1202,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         address lpOnly = makeAddr("lpOnly");
 
         // LP whitelisted but NOT on swap allowlist
-        vm.prank(owner);
-        hook.addToLPWhitelist(lpOnly);
+        hook.addToLPWhitelist(address(this), lpOnly);
 
         // Add liquidity succeeds
         currency0.transfer(lpOnly, 10e18);
