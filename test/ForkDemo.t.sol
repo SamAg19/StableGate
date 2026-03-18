@@ -112,10 +112,14 @@ contract ForkDemoTest is Test {
             address(this),
             FLAGS,
             type(PermissionedCSMMHook).creationCode,
-            abi.encode(address(POOL_MANAGER), REACTIVE_CALLBACK_PROXY, owner)
+            abi.encode(address(POOL_MANAGER), REACTIVE_CALLBACK_PROXY, REACTIVE_CALLBACK_PROXY, owner)
         );
-        hook = new PermissionedCSMMHook{salt: salt}(POOL_MANAGER, REACTIVE_CALLBACK_PROXY, owner);
+        hook = new PermissionedCSMMHook{salt: salt}(POOL_MANAGER, REACTIVE_CALLBACK_PROXY, REACTIVE_CALLBACK_PROXY, owner);
         require(address(hook) == hookAddr, "hook address mismatch");
+
+        // Whitelist the modifyLiquidityRouter so setUp liquidity additions pass beforeAddLiquidity
+        hook.addToLPWhitelist(address(modifyLiquidityRouter));
+
         hook.transferOwnership(owner);
         console2.log("[setup] PermissionedCSMMHook deployed on Unichain fork:", address(hook));
 

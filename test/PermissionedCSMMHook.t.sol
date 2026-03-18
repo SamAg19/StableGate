@@ -32,6 +32,7 @@ contract PermissionedCSMMHookTest is Test, Deployers {
     address institution2 = makeAddr("institution2");
     address unauthorized = makeAddr("unauthorized");
     address reactiveProxy = makeAddr("reactiveProxy");
+    address lpReactiveProxy = makeAddr("lpReactiveProxy");
     address feeRecipientAddr = makeAddr("feeRecipient");
 
     uint160 constant FLAGS = uint160(
@@ -47,11 +48,15 @@ contract PermissionedCSMMHookTest is Test, Deployers {
             address(this),
             FLAGS,
             type(PermissionedCSMMHook).creationCode,
-            abi.encode(address(manager), reactiveProxy, feeRecipientAddr)
+            abi.encode(address(manager), reactiveProxy, lpReactiveProxy, feeRecipientAddr)
         );
 
-        hook = new PermissionedCSMMHook{salt: salt}(manager, reactiveProxy, feeRecipientAddr);
+        hook = new PermissionedCSMMHook{salt: salt}(manager, reactiveProxy, lpReactiveProxy, feeRecipientAddr);
         assertEq(address(hook), hookAddr);
+
+        // Whitelist the modifyLiquidityRouter so setUp liquidity additions pass beforeAddLiquidity.
+        // (sender == modifyLiquidityRouter when hookData is empty)
+        hook.addToLPWhitelist(address(modifyLiquidityRouter));
 
         // Transfer ownership to the designated owner address
         hook.transferOwnership(owner);

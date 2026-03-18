@@ -33,6 +33,9 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     error ZeroFees();
     error ZeroAddress();
     error InvalidSplitBps();
+    error LPNotWhitelisted(address lp);
+    error LPAlreadyWhitelisted(address lp);
+    error LPNotInWhitelist(address lp);
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
@@ -45,6 +48,8 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     event LpFeeSplitUpdated(uint256 oldSplitBps, uint256 newSplitBps);
     event FeesDistributed(address indexed currency, uint256 lpAmount, uint256 operatorAmount);
+    event LPWhitelistUpdated(address indexed lp, bool added);
+    event LPReactiveCallbackProxyUpdated(address indexed oldProxy, address indexed newProxy);
 
     // ─── Fee Constants ────────────────────────────────────────────────────────
 
@@ -98,6 +103,13 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
     /// @notice Expiry timestamp per institution. 0 = no expiry.
     mapping(address => uint256) public institutionExpiry;
 
+    // ─── LP Whitelist State ────────────────────────────────────────────────────
+
+    mapping(address => bool) public lpWhitelist;
+    uint256 public lpWhitelistCount;
+    /// @notice Separate callback proxy for LP RSC — distinct trust relationship from swap RSC.
+    address public lpReactiveCallbackProxy;
+
     // ─── Daily Volume Limit State ─────────────────────────────────────────────
 
     /// @notice Cumulative input volume swapped in the current block window, per institution.
@@ -123,12 +135,16 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     // ─── Constructor ──────────────────────────────────────────────────────────
 
-    constructor(IPoolManager _poolManager, address _reactiveCallbackProxy, address _feeRecipient)
-        BaseHook(_poolManager)
-    {
+    constructor(
+        IPoolManager _poolManager,
+        address _reactiveCallbackProxy,
+        address _lpReactiveCallbackProxy,
+        address _feeRecipient
+    ) BaseHook(_poolManager) {
         if (_feeRecipient == address(0)) revert ZeroAddress();
         owner = msg.sender;
         reactiveCallbackProxy = _reactiveCallbackProxy;
+        lpReactiveCallbackProxy = _lpReactiveCallbackProxy;
         feeRecipient = _feeRecipient;
     }
 
@@ -155,12 +171,14 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
 
     // ─── Hook Callbacks ───────────────────────────────────────────────────────
 
-    function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
-        internal
-        pure
-        override
-        returns (bytes4)
-    {
+    function _beforeAddLiquidity(
+        address sender,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        bytes calldata hookData
+    ) internal view override returns (bytes4) {
+        address lp = hookData.length > 0 ? abi.decode(hookData, (address)) : sender;
+        if (!lpWhitelist[lp]) revert LPNotWhitelisted(lp);
         return IHooks.beforeAddLiquidity.selector;
     }
 
@@ -390,6 +408,34 @@ contract PermissionedCSMMHook is BaseHook, IStableGate {
         if (splitBps > MAX_LP_SPLIT_BPS) revert InvalidSplitBps();
         emit LpFeeSplitUpdated(lpFeeSplitBps, splitBps);
         lpFeeSplitBps = splitBps;
+    }
+
+    // ─── LP Whitelist Management ─────────────────────────────────────────────
+
+    function addToLPWhitelist(address lp) external {
+        if (msg.sender != owner && msg.sender != lpReactiveCallbackProxy) revert NotOwnerOrReactive();
+        if (lp == address(0)) revert ZeroAddress();
+        if (lpWhitelist[lp]) revert LPAlreadyWhitelisted(lp);
+        lpWhitelist[lp] = true;
+        lpWhitelistCount++;
+        emit LPWhitelistUpdated(lp, true);
+    }
+
+    function removeFromLPWhitelist(address lp) external {
+        if (msg.sender != owner && msg.sender != lpReactiveCallbackProxy) revert NotOwnerOrReactive();
+        if (!lpWhitelist[lp]) revert LPNotInWhitelist(lp);
+        lpWhitelist[lp] = false;
+        lpWhitelistCount--;
+        emit LPWhitelistUpdated(lp, false);
+    }
+
+    function isLPWhitelisted(address lp) external view returns (bool) {
+        return lpWhitelist[lp];
+    }
+
+    function setLPReactiveCallbackProxy(address proxy) external onlyOwner {
+        emit LPReactiveCallbackProxyUpdated(lpReactiveCallbackProxy, proxy);
+        lpReactiveCallbackProxy = proxy;
     }
 
     // ─── Admin Functions ──────────────────────────────────────────────────────
