@@ -24,8 +24,9 @@ import {AllowlistReactiveContract} from "../src/AllowlistReactiveContract.sol";
 ///     -vvv
 contract DeployReactive is Script {
     function run() external {
-        address membershipNFT = vm.envAddress("MEMBERSHIP_NFT");
-        address hookContract  = vm.envAddress("HOOK_CONTRACT");
+        address membershipNFT   = vm.envAddress("MEMBERSHIP_NFT");
+        address lpMembershipNFT = vm.envAddress("LP_MEMBERSHIP_NFT");
+        address hookContract    = vm.envAddress("HOOK_CONTRACT");
 
         vm.startBroadcast();
 
@@ -33,6 +34,7 @@ contract DeployReactive is Script {
         // The constructor calls SERVICE_ADDR.subscribe() on Reactive Network (not in ReactVM).
         AllowlistReactiveContract rsc = new AllowlistReactiveContract{value: 0.1 ether}(
             membershipNFT,
+            lpMembershipNFT,
             hookContract
         );
 

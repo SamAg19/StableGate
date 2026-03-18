@@ -11,14 +11,16 @@ contract AllowlistReactiveContractTest is Test {
     AllowlistReactiveContract rsc;
 
     address constant MEMBERSHIP_NFT = address(0x1111);
+    address constant LP_MEMBERSHIP_NFT = address(0x3333);
     address constant HOOK_CONTRACT = address(0x2222);
     address constant INSTITUTION = address(0xBEEF);
+    address constant LP_ADDRESS = address(0xCAFE);
     uint256 constant TOKEN_ID = 1;
 
     function setUp() public {
         // On local Anvil/Forge chain, 0x...fffFfF has no code → vm flag = true (ReactVM mode).
         // Constructor skips subscribe() which is correct — no system contract to call.
-        rsc = new AllowlistReactiveContract(MEMBERSHIP_NFT, HOOK_CONTRACT);
+        rsc = new AllowlistReactiveContract(MEMBERSHIP_NFT, LP_MEMBERSHIP_NFT, HOOK_CONTRACT);
     }
 
     function test_constructorSetsState() public view {

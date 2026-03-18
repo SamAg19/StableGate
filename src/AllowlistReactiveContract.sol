@@ -52,8 +52,11 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     // ─── State ────────────────────────────────────────────────────────────────
 
-    /// @notice MembershipNFT contract on Base Sepolia to monitor.
+    /// @notice MembershipNFT contract on Base Sepolia to monitor (trading credential).
     address public immutable membershipNFT;
+
+    /// @notice LPMembershipNFT contract on Base Sepolia to monitor (LP credential).
+    address public immutable lpMembershipNFT;
 
     /// @notice PermissionedCSMMHook on Unichain Sepolia — callback target.
     address public immutable hookContract;
@@ -67,14 +70,18 @@ contract AllowlistReactiveContract is AbstractReactive {
     event BurnOrTransferDetected(address indexed from, uint256 tokenId, uint256 blockNumber);
     event TierUpdateDetected(address indexed institution, uint8 tier, uint256 blockNumber);
     event ExpirySetDetected(address indexed institution, uint256 expiry, uint256 blockNumber);
+    event LPMintDetected(address indexed lp, uint256 tokenId, uint256 blockNumber);
+    event LPBurnOrTransferDetected(address indexed lp, uint256 tokenId, uint256 blockNumber);
     event CallbackTriggered(address indexed target, uint256 indexed callbackNumber);
 
     // ─── Constructor ──────────────────────────────────────────────────────────
 
-    /// @param _membershipNFT  MembershipNFT address on Base Sepolia.
-    /// @param _hookContract   PermissionedCSMMHook address on Unichain Sepolia.
-    constructor(address _membershipNFT, address _hookContract) payable {
+    /// @param _membershipNFT    MembershipNFT address on Base Sepolia.
+    /// @param _lpMembershipNFT  LPMembershipNFT address on Base Sepolia.
+    /// @param _hookContract     PermissionedCSMMHook address on Unichain Sepolia.
+    constructor(address _membershipNFT, address _lpMembershipNFT, address _hookContract) payable {
         membershipNFT = _membershipNFT;
+        lpMembershipNFT = _lpMembershipNFT;
         hookContract = _hookContract;
 
         if (!vm) {
@@ -110,6 +117,18 @@ contract AllowlistReactiveContract is AbstractReactive {
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
+
+            // Subscription 4: Transfer events on LPMembershipNFT (LP mint/burn/transfer).
+            // Same topic as Subscription 1 but different origin contract.
+            // react() branches on log._contract to distinguish the two NFTs.
+            SERVICE_ADDR.subscribe(
+                BASE_CHAIN_ID,
+                lpMembershipNFT,
+                TRANSFER_EVENT_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
+            );
         }
     }
 
@@ -130,7 +149,11 @@ contract AllowlistReactiveContract is AbstractReactive {
     /// @param log  The full log record delivered by Reactive Network.
     function react(LogRecord calldata log) external override vmOnly {
         if (log.topic_0 == TRANSFER_EVENT_TOPIC) {
-            _handleTransfer(log);
+            if (log._contract == membershipNFT) {
+                _handleMembershipTransfer(log);
+            } else if (log._contract == lpMembershipNFT) {
+                _handleLPTransfer(log);
+            }
         } else if (log.topic_0 == TIER_UPDATED_EVENT_TOPIC) {
             _handleTierUpdated(log);
         } else if (log.topic_0 == EXPIRY_SET_EVENT_TOPIC) {
@@ -140,7 +163,8 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     // ─── Internal Handlers ────────────────────────────────────────────────────
 
-    function _handleTransfer(LogRecord calldata log) internal {
+    /// @dev Handles Transfer events from MembershipNFT (trading credential).
+    function _handleMembershipTransfer(LogRecord calldata log) internal {
         address from = address(uint160(log.topic_1));
         address to = address(uint160(log.topic_2));
         uint256 tokenId = log.topic_3;
@@ -166,6 +190,38 @@ contract AllowlistReactiveContract is AbstractReactive {
             bytes memory payload = abi.encodeWithSignature(
                 "removeFromAllowlistReactive(address,address)",
                 address(0), // placeholder — overwritten by Reactive Network with RVM ID
+                from
+            );
+            emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
+        }
+    }
+
+    /// @dev Handles Transfer events from LPMembershipNFT (LP credential).
+    function _handleLPTransfer(LogRecord calldata log) internal {
+        address from = address(uint160(log.topic_1));
+        address to = address(uint160(log.topic_2));
+        uint256 tokenId = log.topic_3;
+
+        callbackCount++;
+
+        if (from == address(0)) {
+            // LP mint → addToLPWhitelist(to)
+            emit LPMintDetected(to, tokenId, log.block_number);
+            emit CallbackTriggered(hookContract, callbackCount);
+
+            bytes memory payload = abi.encodeWithSignature(
+                "addToLPWhitelist(address)",
+                to
+            );
+            emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
+        } else {
+            // LP burn or transfer → removeFromLPWhitelist(from)
+            // New holder does NOT automatically get LP access.
+            emit LPBurnOrTransferDetected(from, tokenId, log.block_number);
+            emit CallbackTriggered(hookContract, callbackCount);
+
+            bytes memory payload = abi.encodeWithSignature(
+                "removeFromLPWhitelist(address)",
                 from
             );
             emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, hookContract, CALLBACK_GAS_LIMIT, payload);
@@ -230,57 +286,17 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     /// @notice Pause monitoring by unsubscribing from all Base events.
     function pause() external rnOnly {
-        SERVICE_ADDR.unsubscribe(
-            BASE_CHAIN_ID,
-            membershipNFT,
-            TRANSFER_EVENT_TOPIC,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE
-        );
-        SERVICE_ADDR.unsubscribe(
-            BASE_CHAIN_ID,
-            membershipNFT,
-            TIER_UPDATED_EVENT_TOPIC,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE
-        );
-        SERVICE_ADDR.unsubscribe(
-            BASE_CHAIN_ID,
-            membershipNFT,
-            EXPIRY_SET_EVENT_TOPIC,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE
-        );
+        SERVICE_ADDR.unsubscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        SERVICE_ADDR.unsubscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        SERVICE_ADDR.unsubscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        SERVICE_ADDR.unsubscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
     }
 
     /// @notice Resume monitoring by re-subscribing to all Base events.
     function resume() external rnOnly {
-        SERVICE_ADDR.subscribe(
-            BASE_CHAIN_ID,
-            membershipNFT,
-            TRANSFER_EVENT_TOPIC,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE
-        );
-        SERVICE_ADDR.subscribe(
-            BASE_CHAIN_ID,
-            membershipNFT,
-            TIER_UPDATED_EVENT_TOPIC,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE
-        );
-        SERVICE_ADDR.subscribe(
-            BASE_CHAIN_ID,
-            membershipNFT,
-            EXPIRY_SET_EVENT_TOPIC,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE,
-            REACTIVE_IGNORE
-        );
+        SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        SERVICE_ADDR.subscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
     }
 }

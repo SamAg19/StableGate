@@ -127,7 +127,7 @@ contract ForkDemoTest is Test {
         // In the local test env the `vm` flag is true (no system contract code) so the
         // constructor skips subscribe() — exactly as it does on ReactVM.
         // membershipNFT is the Base address; hookContract is the Unichain address.
-        rsc = new AllowlistReactiveContract(address(nft), address(hook));
+        rsc = new AllowlistReactiveContract(address(nft), address(0), address(hook));
         console2.log("[setup] AllowlistReactiveContract deployed (simulating Reactive Lasna):", address(rsc));
 
         // Sort USDC / USDT0 by address — lower address is currency0 in v4
