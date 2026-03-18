@@ -2,13 +2,24 @@
 # Deploy all StableGate contracts across 3 chains in one command.
 #
 # Usage:
-#   source .env && bash script/deploy-all.sh
+#   bash script/deploy-all.sh
 #
 # Prerequisites:
 #   - .env filled with DEPLOYER_ADDRESS, DEPLOYER_PRIVATE_KEY, INSTITUTION_BRONZE/SILVER/GOLD
 #   - Operator funded with ETH on Base Sepolia + Unichain Sepolia + lREACT on Reactive Lasna
 #   - forge build completed
 set -euo pipefail
+
+# ── Load .env (strip comments, blank lines, and export all vars) ─────────────
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  eval "$(grep -v '^\s*#' .env | grep -v '^\s*$' | sed 's/\s*#.*//')"
+  set +a
+else
+  echo "No .env file found — run from repo root"
+  exit 1
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
