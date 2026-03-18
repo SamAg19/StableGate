@@ -446,4 +446,197 @@ contract AllowlistReactiveContractTest is Test {
         assertTrue(tierFound, "setInstitutionTier callback");
         assertTrue(expiryFound, "setInstitutionExpiry callback");
     }
+
+    // ─── LP Credential Tests ────────────────────────────────────────────────
+
+    function _buildLPMintLog(address lp, uint256 tokenId) internal pure returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: 84532,
+            _contract: LP_MEMBERSHIP_NFT,
+            topic_0: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef,
+            topic_1: 0,                       // from == address(0) → mint
+            topic_2: uint256(uint160(lp)),
+            topic_3: tokenId,
+            data: "",
+            block_number: 100,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 0,
+            log_index: 0
+        });
+    }
+
+    function _buildLPBurnLog(address lp, uint256 tokenId) internal pure returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: 84532,
+            _contract: LP_MEMBERSHIP_NFT,
+            topic_0: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef,
+            topic_1: uint256(uint160(lp)),
+            topic_2: 0,                       // to == address(0) → burn
+            topic_3: tokenId,
+            data: "",
+            block_number: 100,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 0,
+            log_index: 0
+        });
+    }
+
+    function _buildLPTransferLog(address from, address to, uint256 tokenId) internal pure returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: 84532,
+            _contract: LP_MEMBERSHIP_NFT,
+            topic_0: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef,
+            topic_1: uint256(uint160(from)),
+            topic_2: uint256(uint160(to)),
+            topic_3: tokenId,
+            data: "",
+            block_number: 100,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 0,
+            log_index: 0
+        });
+    }
+
+    function test_lpMintTriggersAddToLPWhitelist() public {
+        IReactive.LogRecord memory log = _buildLPMintLog(LP_ADDRESS, TOKEN_ID);
+
+        vm.recordLogs();
+        rsc.react(log);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                if (bytes4(payload) == bytes4(keccak256("addToLPWhitelist(address)"))) {
+                    found = true;
+                    address lp = abi.decode(_stripSelector(payload), (address));
+                    assertEq(lp, LP_ADDRESS, "LP address matches");
+                }
+            }
+        }
+        assertTrue(found, "addToLPWhitelist callback not emitted");
+    }
+
+    function test_lpBurnTriggersRemoveFromLPWhitelist() public {
+        IReactive.LogRecord memory log = _buildLPBurnLog(LP_ADDRESS, TOKEN_ID);
+
+        vm.recordLogs();
+        rsc.react(log);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                if (bytes4(payload) == bytes4(keccak256("removeFromLPWhitelist(address)"))) {
+                    found = true;
+                    address lp = abi.decode(_stripSelector(payload), (address));
+                    assertEq(lp, LP_ADDRESS, "LP address matches");
+                }
+            }
+        }
+        assertTrue(found, "removeFromLPWhitelist callback not emitted");
+    }
+
+    function test_lpTransferRevokesOriginalHolder() public {
+        address newHolder = address(0xDEAD);
+        IReactive.LogRecord memory log = _buildLPTransferLog(LP_ADDRESS, newHolder, TOKEN_ID);
+
+        vm.recordLogs();
+        rsc.react(log);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        bool revokeFound;
+        bool grantFound;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                bytes4 selector = bytes4(payload);
+                if (selector == bytes4(keccak256("removeFromLPWhitelist(address)"))) {
+                    revokeFound = true;
+                    address lp = abi.decode(_stripSelector(payload), (address));
+                    assertEq(lp, LP_ADDRESS, "revocation targets original holder");
+                }
+                if (selector == bytes4(keccak256("addToLPWhitelist(address)"))) {
+                    grantFound = true;
+                }
+            }
+        }
+        assertTrue(revokeFound, "LP revocation callback emitted");
+        assertFalse(grantFound, "new holder must NOT get LP access");
+    }
+
+    function test_membershipNFTEventsUnaffected() public {
+        // Trading NFT Transfer should still produce addToAllowlist, not LP callbacks
+        IReactive.LogRecord memory log = _buildMintLog(INSTITUTION, TOKEN_ID);
+
+        vm.recordLogs();
+        rsc.react(log);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        bool addFound;
+        bool lpFound;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                bytes4 selector = bytes4(payload);
+                if (selector == bytes4(keccak256("addToAllowlistReactive(address,address)"))) addFound = true;
+                if (selector == bytes4(keccak256("addToLPWhitelist(address)"))) lpFound = true;
+            }
+        }
+        assertTrue(addFound, "trading addToAllowlist callback fires");
+        assertFalse(lpFound, "no LP callback for trading NFT");
+    }
+
+    function test_lpPayloadEncoding() public {
+        IReactive.LogRecord memory log = _buildLPMintLog(LP_ADDRESS, TOKEN_ID);
+
+        vm.recordLogs();
+        rsc.react(log);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                assertEq(
+                    bytes4(payload),
+                    bytes4(keccak256("addToLPWhitelist(address)")),
+                    "selector matches addToLPWhitelist"
+                );
+            }
+        }
+    }
+
+    function test_bothNFTsInSameTx() public {
+        vm.recordLogs();
+        rsc.react(_buildMintLog(INSTITUTION, 1));       // trading credential
+        rsc.react(_buildLPMintLog(LP_ADDRESS, 2));      // LP credential
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        assertEq(rsc.callbackCount(), 2, "two callbacks emitted");
+
+        bool tradeFound;
+        bool lpFound;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == keccak256("Callback(uint256,address,uint64,bytes)")) {
+                bytes memory payload = abi.decode(logs[i].data, (bytes));
+                bytes4 selector = bytes4(payload);
+                if (selector == bytes4(keccak256("addToAllowlistReactive(address,address)"))) tradeFound = true;
+                if (selector == bytes4(keccak256("addToLPWhitelist(address)"))) lpFound = true;
+            }
+        }
+        assertTrue(tradeFound, "trading callback");
+        assertTrue(lpFound, "LP callback");
+    }
+
+    function test_lpCallbackCountIncrements() public {
+        rsc.react(_buildMintLog(INSTITUTION, 1));           // trading mint: count = 1
+        rsc.react(_buildLPMintLog(LP_ADDRESS, 2));          // LP mint: count = 2
+        rsc.react(_buildLPBurnLog(LP_ADDRESS, 2));          // LP burn: count = 3
+        assertEq(rsc.callbackCount(), 3);
+    }
 }
