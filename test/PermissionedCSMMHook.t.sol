@@ -1049,4 +1049,259 @@ contract PermissionedCSMMHookTest is Test, Deployers {
         // The exact amount depends on tick rounding; just verify it's > 0
         assertTrue(bal1After > bal1Before, "LP2 earned fees from donate()");
     }
+
+    // ─── LP Whitelist Management Tests ──────────────────────────────────────
+
+    event LPWhitelistUpdated(address indexed lp, bool added);
+
+    function test_ownerCanAddToLPWhitelist() public {
+        vm.prank(owner);
+        hook.addToLPWhitelist(institution1);
+        assertTrue(hook.isLPWhitelisted(institution1));
+        // modifyLiquidityRouter is already whitelisted in setUp, so count starts at 1
+        assertEq(hook.lpWhitelistCount(), 2);
+    }
+
+    function test_lpProxyCanAddToLPWhitelist() public {
+        vm.prank(lpReactiveProxy);
+        hook.addToLPWhitelist(institution1);
+        assertTrue(hook.isLPWhitelisted(institution1));
+    }
+
+    function test_revert_unauthorizedCannotAddLP() public {
+        vm.prank(unauthorized);
+        vm.expectRevert(PermissionedCSMMHook.NotOwnerOrReactive.selector);
+        hook.addToLPWhitelist(institution1);
+    }
+
+    function test_revert_cannotAddDuplicateLP() public {
+        vm.prank(owner);
+        hook.addToLPWhitelist(institution1);
+
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(PermissionedCSMMHook.LPAlreadyWhitelisted.selector, institution1));
+        hook.addToLPWhitelist(institution1);
+    }
+
+    function test_revert_cannotAddZeroAddressLP() public {
+        vm.prank(owner);
+        vm.expectRevert(PermissionedCSMMHook.ZeroAddress.selector);
+        hook.addToLPWhitelist(address(0));
+    }
+
+    function test_ownerCanRemoveLP() public {
+        vm.prank(owner);
+        hook.addToLPWhitelist(institution1);
+        uint256 countBefore = hook.lpWhitelistCount();
+
+        vm.prank(owner);
+        hook.removeFromLPWhitelist(institution1);
+        assertFalse(hook.isLPWhitelisted(institution1));
+        assertEq(hook.lpWhitelistCount(), countBefore - 1);
+    }
+
+    function test_lpProxyCanRemoveLP() public {
+        vm.prank(owner);
+        hook.addToLPWhitelist(institution1);
+
+        vm.prank(lpReactiveProxy);
+        hook.removeFromLPWhitelist(institution1);
+        assertFalse(hook.isLPWhitelisted(institution1));
+    }
+
+    function test_revert_removeNonExistentLP() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(PermissionedCSMMHook.LPNotInWhitelist.selector, institution1));
+        hook.removeFromLPWhitelist(institution1);
+    }
+
+    // ─── beforeAddLiquidity Enforcement Tests ───────────────────────────────
+
+    function _expectAddLiquidityRevert(bytes memory innerError) internal {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeAddLiquidity.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+    }
+
+    function test_whitelistedLPCanAddLiquidity() public {
+        vm.prank(owner);
+        hook.addToLPWhitelist(institution1);
+
+        // Fund institution1 and approve
+        currency0.transfer(institution1, 10e18);
+        currency1.transfer(institution1, 10e18);
+        vm.startPrank(institution1);
+        IERC20(Currency.unwrap(currency0)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+
+        // hookData encodes institution1 as the LP identity
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e15, salt: 0}),
+            abi.encode(institution1)
+        );
+        vm.stopPrank();
+    }
+
+    function test_revert_nonWhitelistedLPCannotAddLiquidity() public {
+        // institution1 is NOT on LP whitelist — hookData encodes them as the LP
+        _expectAddLiquidityRevert(
+            abi.encodeWithSelector(PermissionedCSMMHook.LPNotWhitelisted.selector, institution1)
+        );
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e15, salt: 0}),
+            abi.encode(institution1)
+        );
+    }
+
+    function test_revokedLPBlockedFromAddingLiquidity() public {
+        vm.prank(owner);
+        hook.addToLPWhitelist(institution1);
+
+        currency0.transfer(institution1, 10e18);
+        currency1.transfer(institution1, 10e18);
+        vm.startPrank(institution1);
+        IERC20(Currency.unwrap(currency0)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+
+        // First add succeeds
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e15, salt: 0}),
+            abi.encode(institution1)
+        );
+        vm.stopPrank();
+
+        // Revoke LP access
+        vm.prank(owner);
+        hook.removeFromLPWhitelist(institution1);
+
+        // Second add reverts
+        vm.prank(institution1);
+        _expectAddLiquidityRevert(
+            abi.encodeWithSelector(PermissionedCSMMHook.LPNotWhitelisted.selector, institution1)
+        );
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e15, salt: 0}),
+            abi.encode(institution1)
+        );
+    }
+
+    function test_revokedLPExistingPositionUntouched() public {
+        vm.prank(owner);
+        hook.addToLPWhitelist(institution1);
+
+        currency0.transfer(institution1, 10e18);
+        currency1.transfer(institution1, 10e18);
+        vm.startPrank(institution1);
+        IERC20(Currency.unwrap(currency0)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e15, salt: 0}),
+            abi.encode(institution1)
+        );
+        vm.stopPrank();
+
+        // Record pool manager balances before revocation
+        uint256 pmBal0 = currency0.balanceOf(address(manager));
+        uint256 pmBal1 = currency1.balanceOf(address(manager));
+
+        // Revoke — should NOT alter pool balances
+        vm.prank(owner);
+        hook.removeFromLPWhitelist(institution1);
+
+        assertEq(currency0.balanceOf(address(manager)), pmBal0, "currency0 unchanged");
+        assertEq(currency1.balanceOf(address(manager)), pmBal1, "currency1 unchanged");
+    }
+
+    function test_removeLiquidityStillAllowedAfterRevocation() public {
+        vm.prank(owner);
+        hook.addToLPWhitelist(institution1);
+
+        currency0.transfer(institution1, 10e18);
+        currency1.transfer(institution1, 10e18);
+        vm.startPrank(institution1);
+        IERC20(Currency.unwrap(currency0)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e15, salt: 0}),
+            abi.encode(institution1)
+        );
+        vm.stopPrank();
+
+        // Revoke LP access
+        vm.prank(owner);
+        hook.removeFromLPWhitelist(institution1);
+
+        // Remove liquidity still works — beforeRemoveLiquidity is not hooked
+        vm.prank(institution1);
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: -1e15, salt: 0}),
+            abi.encode(institution1)
+        );
+    }
+
+    function test_swapAccessIndependentOfLPAccess() public {
+        // institution1 is on swap allowlist (Gold tier) but NOT LP whitelisted
+        vm.prank(owner);
+        hook.addToAllowlist(institution1);
+
+        // Swap succeeds
+        swap(poolKey, true, -1e15, abi.encode(institution1));
+
+        // Add liquidity reverts — not LP whitelisted
+        _expectAddLiquidityRevert(
+            abi.encodeWithSelector(PermissionedCSMMHook.LPNotWhitelisted.selector, institution1)
+        );
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e15, salt: 0}),
+            abi.encode(institution1)
+        );
+    }
+
+    function test_lpAccessIndependentOfSwapAccess() public {
+        address lpOnly = makeAddr("lpOnly");
+
+        // LP whitelisted but NOT on swap allowlist
+        vm.prank(owner);
+        hook.addToLPWhitelist(lpOnly);
+
+        // Add liquidity succeeds
+        currency0.transfer(lpOnly, 10e18);
+        currency1.transfer(lpOnly, 10e18);
+        vm.startPrank(lpOnly);
+        IERC20(Currency.unwrap(currency0)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        IERC20(Currency.unwrap(currency1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({tickLower: -120, tickUpper: 120, liquidityDelta: 1e15, salt: 0}),
+            abi.encode(lpOnly)
+        );
+        vm.stopPrank();
+
+        // Swap reverts — not on swap allowlist
+        bytes memory innerError = abi.encodeWithSelector(PermissionedCSMMHook.SwapperNotAllowlisted.selector, lpOnly);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.beforeSwap.selector,
+                innerError,
+                abi.encodePacked(Hooks.HookCallFailed.selector)
+            )
+        );
+        swap(poolKey, true, -1e15, abi.encode(lpOnly));
+    }
 }
