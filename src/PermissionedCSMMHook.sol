@@ -130,10 +130,12 @@ contract PermissionedCSMMHook is BaseHook, AbstractCallback, IStableGate {
 
     constructor(
         IPoolManager _poolManager,
+        address _owner,
         address _feeRecipient
     ) BaseHook(_poolManager) AbstractCallback(CALLBACK_PROXY) {
+        if (_owner == address(0)) revert ZeroAddress();
         if (_feeRecipient == address(0)) revert ZeroAddress();
-        owner = msg.sender;
+        owner = _owner;
         feeRecipient = _feeRecipient;
     }
 

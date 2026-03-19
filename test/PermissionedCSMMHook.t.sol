@@ -46,10 +46,10 @@ contract PermissionedCSMMHookTest is Test, Deployers {
             address(this),
             FLAGS,
             type(PermissionedCSMMHook).creationCode,
-            abi.encode(address(manager), feeRecipientAddr)
+            abi.encode(address(manager), address(this), feeRecipientAddr)
         );
 
-        hook = new PermissionedCSMMHook{salt: salt}(manager, feeRecipientAddr);
+        hook = new PermissionedCSMMHook{salt: salt}(manager, address(this), feeRecipientAddr);
         assertEq(address(hook), hookAddr);
 
         // Whitelist the modifyLiquidityRouter so setUp liquidity additions pass beforeAddLiquidity.

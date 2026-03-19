@@ -7,9 +7,6 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiquidityTest.sol";
 import {HookMiner} from "v4-hooks-public/utils/HookMiner.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PermissionedCSMMHook} from "../src/PermissionedCSMMHook.sol";
@@ -17,7 +14,8 @@ import {MockUSDC} from "../src/mocks/MockUSDC.sol";
 import {MockUSDT0} from "../src/mocks/MockUSDT0.sol";
 
 /// @notice Deploy MockUSDC, MockUSDT0, PermissionedCSMMHook to Unichain Sepolia.
-///         Initializes the USDC/USDT0 pool with the hook attached and seeds it with liquidity.
+///         Initializes the USDC/USDT0 pool with the hook attached.
+///         Liquidity is added by institutions after they receive LP credentials via Reactive Network.
 ///
 /// Usage:
 ///   source .env
@@ -40,11 +38,9 @@ contract DeployUnichain is Script {
     /// @dev sqrtPriceX96 for price 1:1 (both tokens are 6 decimals)
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
 
-    /// @dev Seed amounts for the pool
+    /// @dev Mint amounts
     uint256 constant OPERATOR_MINT    = 500_000e6;
     uint256 constant INSTITUTION_MINT = 100_000e6;
-    uint256 constant SEED_LIQUIDITY   = 200_000e6; // liquidity delta for initial LP position
-    uint256 constant HOOK_RESERVE     = 200_000e6; // tokens seeded directly into hook
 
     function run() external {
         address deployer          = vm.envAddress("DEPLOYER_ADDRESS");
@@ -53,11 +49,15 @@ contract DeployUnichain is Script {
         address institutionGold   = vm.envAddress("INSTITUTION_GOLD");
 
         // ── Step 1: Mine hook salt before broadcast ─────────────────────────
+        // When using forge script --broadcast, CREATE2 goes through the
+        // deterministic deployer at 0x4e59b44847b379578588920cA78FbF26c0B4956C.
+        // HookMiner must use that address (not the EOA deployer) as the origin.
+        address create2Factory = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
         (address hookAddr, bytes32 salt) = HookMiner.find(
-            deployer,
+            create2Factory,
             FLAGS,
             type(PermissionedCSMMHook).creationCode,
-            abi.encode(address(POOL_MANAGER), deployer)
+            abi.encode(address(POOL_MANAGER), deployer, deployer)
         );
 
         vm.startBroadcast();
@@ -66,7 +66,7 @@ contract DeployUnichain is Script {
         MockUSDC  mockUSDC  = new MockUSDC();
         MockUSDT0 mockUSDT0 = new MockUSDT0();
 
-        // Mint to operator — for seeding pool liquidity and hook reserves
+        // Mint to operator
         mockUSDC.mint(deployer,      OPERATOR_MINT);
         mockUSDT0.mint(deployer,     OPERATOR_MINT);
 
@@ -81,24 +81,13 @@ contract DeployUnichain is Script {
         // ── Step 3: Deploy hook ─────────────────────────────────────────────
         PermissionedCSMMHook hook = new PermissionedCSMMHook{salt: salt}(
             POOL_MANAGER,
-            deployer // feeRecipient defaults to deployer
+            deployer, // owner
+            deployer  // feeRecipient defaults to deployer
         );
         require(address(hook) == hookAddr, "hook address mismatch");
         hook.setBlocksPerDay(BLOCKS_PER_DAY);
 
-        // ── Step 4: Whitelist deployer as LP (needed to seed liquidity) ─────
-        hook.addToLPWhitelist(deployer, deployer);
-
-        // ── Step 5: Deploy liquidity router helper ──────────────────────────
-        // PoolModifyLiquidityTest is a v4-core test utility that wraps the
-        // unlock → modifyLiquidity pattern. Deployed on-chain for testnet seeding.
-        PoolModifyLiquidityTest liquidityRouter = new PoolModifyLiquidityTest(POOL_MANAGER);
-
-        // Also whitelist the liquidity router so beforeAddLiquidity passes
-        // when hookData is empty (sender fallback path)
-        hook.addToLPWhitelist(deployer, address(liquidityRouter));
-
-        // ── Step 6: Sort tokens and initialize pool ─────────────────────────
+        // ── Step 4: Sort tokens and initialize pool ─────────────────────────
         (address token0, address token1) = address(mockUSDC) < address(mockUSDT0)
             ? (address(mockUSDC), address(mockUSDT0))
             : (address(mockUSDT0), address(mockUSDC));
@@ -113,27 +102,12 @@ contract DeployUnichain is Script {
 
         POOL_MANAGER.initialize(poolKey, SQRT_PRICE_1_1);
 
-        // ── Step 7: Approve router and seed full-range liquidity ────────────
-        IERC20(token0).approve(address(liquidityRouter), type(uint256).max);
-        IERC20(token1).approve(address(liquidityRouter), type(uint256).max);
-
-        // Add full-range liquidity. For 6-decimal tokens at full range,
-        // liquidityDelta ≈ raw token units deposited per side.
-        liquidityRouter.modifyLiquidity(
-            poolKey,
-            ModifyLiquidityParams({
-                tickLower:      -887272,
-                tickUpper:       887272,
-                liquidityDelta:  int256(SEED_LIQUIDITY),
-                salt:            0
-            }),
-            "" // empty hookData — sender (liquidityRouter) is LP-whitelisted
-        );
-
-        // ── Step 8: Seed hook reserves ──────────────────────────────────────
+        // ── Step 5: Seed hook reserves ──────────────────────────────────────
         // CSMM pays output tokens directly from the hook's balance.
-        IERC20(token0).transfer(address(hook),  HOOK_RESERVE);
-        IERC20(token1).transfer(address(hook),  HOOK_RESERVE);
+        // Institutions add pool liquidity after receiving LP credentials via Reactive Network.
+        uint256 hookReserve = 200_000e6;
+        IERC20(token0).transfer(address(hook),  hookReserve);
+        IERC20(token1).transfer(address(hook),  hookReserve);
 
         vm.stopBroadcast();
 
@@ -160,12 +134,7 @@ contract DeployUnichain is Script {
         console2.log("  currency1:             ", token1);
         console2.log("  fee:                    100 (0.01%)");
         console2.log("  tickSpacing:            1");
-        console2.log("  Seed liquidity:        ", SEED_LIQUIDITY);
-        console2.log("  Hook USDC reserve:     ", IERC20(token0).balanceOf(address(hook)));
-        console2.log("  Hook USDT0 reserve:    ", IERC20(token1).balanceOf(address(hook)));
-        console2.log("");
-        console2.log("Liquidity router (testnet helper):");
-        console2.log("  PoolModifyLiquidityTest:", address(liquidityRouter));
+        console2.log("  Hook reserve (each):   ", hookReserve);
         console2.log("");
         console2.log("Set in .env:");
         console2.log("  USDC_ADDRESS=",   address(mockUSDC));

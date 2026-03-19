@@ -67,10 +67,6 @@ ok "All required env vars present"
 
 # ── Build ────────────────────────────────────────────────────────────────────
 
-log "Building contracts..."
-forge build --force --silent
-ok "forge build complete"
-
 # ── Step 1: Base Sepolia ─────────────────────────────────────────────────────
 
 log "Step 1/3: Deploying to Base Sepolia (MembershipNFT + LPMembershipNFT)..."

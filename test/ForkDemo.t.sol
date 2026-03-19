@@ -114,9 +114,9 @@ contract ForkDemoTest is Test {
             address(this),
             FLAGS,
             type(PermissionedCSMMHook).creationCode,
-            abi.encode(address(POOL_MANAGER), owner)
+            abi.encode(address(POOL_MANAGER), address(this), owner)
         );
-        hook = new PermissionedCSMMHook{salt: salt}(POOL_MANAGER, owner);
+        hook = new PermissionedCSMMHook{salt: salt}(POOL_MANAGER, address(this), owner);
         require(address(hook) == hookAddr, "hook address mismatch");
 
         // Whitelist the modifyLiquidityRouter so setUp liquidity additions pass beforeAddLiquidity.
