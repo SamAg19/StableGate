@@ -1,7 +1,7 @@
 import { createPublicClient, createWalletClient, http, type WalletClient, type Transport, type Chain, type Account } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { baseSepolia } from 'viem/chains'
-import { unichainSepolia, reactiveLasna, INSTITUTIONS, type TierKey } from './config.js'
+import { unichainSepolia, reactiveLasna, INSTITUTIONS, LP_INSTITUTION, type TierKey } from './config.js'
 
 function requireKey(key: string): `0x${string}` {
   const val = process.env[key]
@@ -46,3 +46,10 @@ const institutionClients: Record<TierKey, WalletClient<Transport, Chain, Account
 export function getInstitutionClient(tier: TierKey) {
   return institutionClients[tier]
 }
+
+// LP institution wallet client — for seeding pool liquidity
+export const unichainLP = createWalletClient({
+  account: privateKeyToAccount(LP_INSTITUTION.privateKey),
+  chain: unichainSepolia,
+  transport: http(),
+})

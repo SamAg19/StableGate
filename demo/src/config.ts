@@ -102,6 +102,12 @@ export function getInstitution(tier?: TierKey) {
   return INSTITUTIONS[tier ?? DEFAULT_TIER]
 }
 
+// LP institution — dedicated for seeding pool liquidity
+export const LP_INSTITUTION = {
+  address: requireEnv('INSTITUTION_LP_ADDRESS'),
+  privateKey: requireEnv('INSTITUTION_LP_PRIVATE_KEY'),
+}
+
 // ── Reactscan helpers ──────────────────────────────────────────────────────
 
 export function reactscanRscUrl(contractAddress: string): string {
