@@ -26,7 +26,7 @@ import {MockUSDT0} from "../src/mocks/MockUSDT0.sol";
 ///     -vvv
 contract DeployUnichain is Script {
     // Unichain Sepolia PoolManager address
-    IPoolManager constant POOL_MANAGER = IPoolManager(0xC81462Fec8B23319F288047f8A03A57682a35C1A);
+    IPoolManager constant POOL_MANAGER = IPoolManager(0x00B036B58a818B1BC34d502D3fE730Db729e62AC);
 
     uint160 constant FLAGS = uint160(
         Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
@@ -41,12 +41,14 @@ contract DeployUnichain is Script {
     /// @dev Mint amounts
     uint256 constant OPERATOR_MINT    = 500_000e6;
     uint256 constant INSTITUTION_MINT = 100_000e6;
+    uint256 constant LP_MINT          = 500_000e6; // LP institution needs more for seeding pool
 
     function run() external {
         address deployer          = vm.envAddress("DEPLOYER_ADDRESS");
         address institutionBronze = vm.envAddress("INSTITUTION_BRONZE");
         address institutionSilver = vm.envAddress("INSTITUTION_SILVER");
         address institutionGold   = vm.envAddress("INSTITUTION_GOLD");
+        address institutionLP     = vm.envAddress("INSTITUTION_LP");
 
         // ── Step 1: Mine hook salt before broadcast ─────────────────────────
         // When using forge script --broadcast, CREATE2 goes through the
@@ -78,6 +80,10 @@ contract DeployUnichain is Script {
         mockUSDC.mint(institutionGold,    INSTITUTION_MINT);
         mockUSDT0.mint(institutionGold,   INSTITUTION_MINT);
 
+        // Mint to LP institution — extra allocation for seeding pool liquidity
+        mockUSDC.mint(institutionLP,      LP_MINT);
+        mockUSDT0.mint(institutionLP,     LP_MINT);
+
         // ── Step 3: Deploy hook ─────────────────────────────────────────────
         PermissionedCSMMHook hook = new PermissionedCSMMHook{salt: salt}(
             POOL_MANAGER,
@@ -102,13 +108,6 @@ contract DeployUnichain is Script {
 
         POOL_MANAGER.initialize(poolKey, SQRT_PRICE_1_1);
 
-        // ── Step 5: Seed hook reserves ──────────────────────────────────────
-        // CSMM pays output tokens directly from the hook's balance.
-        // Institutions add pool liquidity after receiving LP credentials via Reactive Network.
-        uint256 hookReserve = 200_000e6;
-        IERC20(token0).transfer(address(hook),  hookReserve);
-        IERC20(token1).transfer(address(hook),  hookReserve);
-
         vm.stopBroadcast();
 
         // ── Logging ─────────────────────────────────────────────────────────
@@ -121,6 +120,7 @@ contract DeployUnichain is Script {
         console2.log("  Bronze inst USDC:      ", IERC20(address(mockUSDC)).balanceOf(institutionBronze));
         console2.log("  Silver inst USDC:      ", IERC20(address(mockUSDC)).balanceOf(institutionSilver));
         console2.log("  Gold inst USDC:        ", IERC20(address(mockUSDC)).balanceOf(institutionGold));
+        console2.log("  LP inst USDC:          ", IERC20(address(mockUSDC)).balanceOf(institutionLP));
         console2.log("");
         console2.log("Hook:");
         console2.log("  PermissionedCSMMHook:  ", address(hook));
@@ -134,7 +134,7 @@ contract DeployUnichain is Script {
         console2.log("  currency1:             ", token1);
         console2.log("  fee:                    100 (0.01%)");
         console2.log("  tickSpacing:            1");
-        console2.log("  Hook reserve (each):   ", hookReserve);
+        console2.log("  Hook reserves:          seeded by LP institution post-deploy");
         console2.log("");
         console2.log("Set in .env:");
         console2.log("  USDC_ADDRESS=",   address(mockUSDC));
