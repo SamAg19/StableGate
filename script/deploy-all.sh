@@ -162,6 +162,7 @@ else
     --rpc-url "$UNICHAIN_SEPOLIA_RPC" \
     --broadcast \
     --private-key "$DEPLOYER_PRIVATE_KEY" \
+    --slow \
     -vvv
 
   USDC_ADDRESS=$(echo "$LAST_OUTPUT" | grep "USDC_ADDRESS=" | head -1 | sed 's/.*USDC_ADDRESS= *//' | tr -d '[:space:]')
