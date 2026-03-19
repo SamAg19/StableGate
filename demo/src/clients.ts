@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { createPublicClient, createWalletClient, http, type WalletClient, type Transport, type Chain, type Account } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { baseSepolia } from 'viem/chains'

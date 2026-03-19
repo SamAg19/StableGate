@@ -137,6 +137,10 @@ contract PermissionedCSMMHook is BaseHook, AbstractCallback, IStableGate {
         if (_feeRecipient == address(0)) revert ZeroAddress();
         owner = _owner;
         feeRecipient = _feeRecipient;
+        // Override rvm_id set by AbstractCallback (which uses msg.sender).
+        // When deployed via CREATE2 factory, msg.sender is the factory not the deployer.
+        // The RSC sends the deployer's address as rvm_id in callbacks, so it must match.
+        rvm_id = _owner;
     }
 
     /// @dev Override receive() to resolve conflict between AbstractPayer and any other parent.

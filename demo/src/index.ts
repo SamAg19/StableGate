@@ -8,8 +8,6 @@ import { addLiquidity }           from './steps/step3_addLiquidity.js'
 import { mintTradingCredential }  from './steps/step4_mintTrading.js'
 import { waitForTradingCallback } from './steps/step5_waitTradingCallback.js'
 import { executeSwap }            from './steps/step6_swap.js'
-import { revokeAndWithdraw }      from './steps/step7_revokeAndWithdraw.js'
-
 const args   = process.argv.slice(2)
 const filter = args.find(a => a.startsWith('--only='))?.split('=')[1]
 const fresh  = args.includes('--fresh')
@@ -21,16 +19,17 @@ const tier: TierKey = tierArg && ['bronze', 'silver', 'gold'].includes(tierArg)
   ? tierArg
   : DEFAULT_TIER
 
-// Steps in order with their segment assignment
-const steps = [
-  { num: 1, seg: 'lp',      fn: mintLPCredential },
-  { num: 2, seg: 'lp',      fn: waitForLPCallback },
-  { num: 3, seg: 'lp',      fn: addLiquidity },
-  { num: 4, seg: 'trading',  fn: mintTradingCredential },
-  { num: 5, seg: 'trading',  fn: waitForTradingCallback },
-  { num: 6, seg: 'trading',  fn: executeSwap },
-  { num: 7, seg: 'revoke',   fn: revokeAndWithdraw },
-] as const
+// LP steps use the dedicated LP institution (no tier parameter)
+// Trading steps use the tier-specific institution
+type StepFn = ((tier: TierKey) => Promise<void>) | (() => Promise<void>)
+const steps: { num: number; seg: string; fn: StepFn; needsTier: boolean }[] = [
+  { num: 1, seg: 'lp',      fn: mintLPCredential,       needsTier: false },
+  { num: 2, seg: 'lp',      fn: waitForLPCallback,      needsTier: false },
+  { num: 3, seg: 'lp',      fn: addLiquidity,            needsTier: false },
+  { num: 4, seg: 'trading',  fn: mintTradingCredential,  needsTier: true },
+  { num: 5, seg: 'trading',  fn: waitForTradingCallback, needsTier: true },
+  { num: 6, seg: 'trading',  fn: executeSwap,            needsTier: true },
+]
 
 async function main() {
   banner()
@@ -43,11 +42,9 @@ async function main() {
     lastCompleted = 0
   }
 
-  for (const { num, seg, fn } of steps) {
+  for (const { num, seg, fn, needsTier } of steps) {
     // Skip steps not in the requested segment
-    if (!run(seg) && seg !== 'revoke') continue
-    // For revoke segment, check both 'revoke' and 'fees'
-    if (seg === 'revoke' && !run('revoke') && !run('fees')) continue
+    if (!run(seg)) continue
 
     // Skip already-completed steps (from snapshot)
     if (num <= lastCompleted) {
@@ -55,7 +52,11 @@ async function main() {
       continue
     }
 
-    await fn(tier)
+    if (needsTier) {
+      await (fn as (tier: TierKey) => Promise<void>)(tier)
+    } else {
+      await (fn as () => Promise<void>)()
+    }
     saveSnapshot(tier, num)
     sectionDivider()
   }

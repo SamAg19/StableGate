@@ -108,6 +108,24 @@ contract DeployUnichain is Script {
 
         POOL_MANAGER.initialize(poolKey, SQRT_PRICE_1_1);
 
+        // ── Step 5: Seed hook reserves ──────────────────────────────────────
+        // CSMM pays output tokens directly from the hook's balance.
+        // Without reserves, swaps revert with ERC20InsufficientBalance.
+        // Mint directly to hook since MockUSDC/MockUSDT0 have public mint.
+        uint256 hookReserve = 200_000e6;
+        mockUSDC.mint(address(hook),  hookReserve);
+        mockUSDT0.mint(address(hook), hookReserve);
+
+        // ── Step 6: Fund hook on callback proxy ─────────────────────────────
+        // The Unichain callback proxy charges the hook for gas on every callback.
+        // If the hook has no reserves, the proxy blacklists it and blocks all
+        // future callbacks. Deposit ETH via depositTo(hook) to pre-fund reserves.
+        address callbackProxy = hook.CALLBACK_PROXY();
+        (bool deposited,) = callbackProxy.call{value: 0.005 ether}(
+            abi.encodeWithSignature("depositTo(address)", address(hook))
+        );
+        require(deposited, "Failed to fund hook on callback proxy");
+
         vm.stopBroadcast();
 
         // ── Logging ─────────────────────────────────────────────────────────
@@ -128,6 +146,7 @@ contract DeployUnichain is Script {
         console2.log("  CallbackProxy:         ", hook.CALLBACK_PROXY());
         console2.log("  Owner (deployer):      ", deployer);
         console2.log("  blocksPerDay:          ", hook.blocksPerDay());
+        console2.log("  Callback proxy funded:  0.005 ETH deposited for hook gas reserves");
         console2.log("");
         console2.log("Pool:");
         console2.log("  currency0:             ", token0);

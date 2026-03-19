@@ -1,7 +1,7 @@
 import chalk from 'chalk'
 import Table from 'cli-table3'
 
-const TOTAL_STEPS = 7
+const TOTAL_STEPS = 6
 
 export function banner() {
   console.log(chalk.cyan.bold(`
@@ -38,7 +38,7 @@ export function txLink(label: string, hash: string, chain: 'base' | 'unichain') 
 // Prints a Reactscan link for the RSC — presenter can open this in browser
 // during cross-chain wait to show live RSC activity
 export function reactscanLink(label: string, contractAddress: string) {
-  const url = `https://reactscan.net/rsc/${contractAddress}`
+  const url = `https://lasna.reactscan.net/rsc/${contractAddress}`
   console.log(`  ${chalk.magenta('*')} ${label}: ${chalk.underline.magenta(url)}`)
 }
 

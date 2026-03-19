@@ -13,15 +13,18 @@
     "extract-abis": "bash scripts/extract-abis.sh"
   },
   "dependencies": {
-    "viem": "^2.x",
-    "dotenv": "^16.x",
-    "ora": "^8.x",
+    "@uniswap/sdk-core": "^7.12.2",
+    "@uniswap/v4-sdk": "^1.29.3",
     "chalk": "^5.x",
-    "cli-table3": "^0.6.x"
+    "cli-table3": "^0.6.x",
+    "dotenv": "^16.x",
+    "ethers": "5",
+    "ora": "^8.x",
+    "viem": "^2.x"
   },
   "devDependencies": {
-    "typescript": "^5.x",
+    "@types/node": "^20.x",
     "tsx": "^4.x",
-    "@types/node": "^20.x"
+    "typescript": "^5.x"
   }
 }

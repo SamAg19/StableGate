@@ -1,25 +1,31 @@
 import { type Abi } from 'viem'
 import { baseOperator, basePublic } from '../clients.js'
 import { CONTRACTS, type TierKey, getInstitution } from '../config.js'
-import { step, success, txLink, stateTable } from '../logger.js'
+import { step, info, success, txLink, stateTable } from '../logger.js'
 import MembershipNFTABI from '../../abis/MembershipNFT.json' assert { type: 'json' }
 
 export async function mintTradingCredential(tier: TierKey) {
   const inst = getInstitution(tier)
   step(4, `Minting Trading Credential (MembershipNFT, ${inst.tierName} tier) — Base Sepolia`)
 
-  const wasMember = await basePublic.readContract({
+  const isMember = await basePublic.readContract({
     address: CONTRACTS.base.membershipNFT,
     abi: MembershipNFTABI as Abi,
     functionName: 'isMember',
     args: [inst.address],
   }) as boolean
 
+  if (isMember) {
+    info(`Institution ${inst.address} is already a member — skipping mint`)
+    success('MembershipNFT already exists')
+    return
+  }
+
   stateTable('State before mint', [
     ['Chain',        'Base Sepolia (84532)'],
     ['Institution',  inst.address],
     ['Tier',         inst.tierName],
-    ['Is member',    String(wasMember)],
+    ['Is member',    'false'],
   ])
 
   // Mint with specified tier (Bronze=0, Silver=1, Gold=2)
@@ -51,7 +57,7 @@ export async function mintTradingCredential(tier: TierKey) {
     ['Is member',      'true'],
     ['Token ID',       String(tokenId)],
     ['Tier',           inst.tierName],
-    ['Expires',        new Date(Number(expiry) * 1000).toISOString()],
+    ['Expires',        expiry > 0n ? new Date(Number(expiry) * 1000).toISOString() : 'none'],
     ['Events emitted', 'Transfer + TierUpdated + ExpirySet'],
   ])
 

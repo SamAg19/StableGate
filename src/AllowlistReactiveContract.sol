@@ -32,7 +32,7 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     /// @notice keccak256("TierUpdated(address,uint8)") — emitted by MembershipNFT on tier changes.
     uint256 public constant TIER_UPDATED_EVENT_TOPIC =
-        0x15b3b7a9d17f2a7c5af2eb40b81427fddcf32c98aa6a9b6b5ebe00d42f6daa2b;
+        uint256(keccak256("TierUpdated(address,uint8)"));
 
     /// @notice keccak256("ExpirySet(address,uint256)") — emitted by MembershipNFT on expiry writes.
     uint256 public constant EXPIRY_SET_EVENT_TOPIC =

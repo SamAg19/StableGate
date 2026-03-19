@@ -23,7 +23,7 @@ export const reactiveLasna = defineChain({
     default: { http: ['https://lasna-rpc.rnk.dev/'] }
   },
   blockExplorers: {
-    default: { name: 'Reactscan', url: 'https://reactscan.net' }
+    default: { name: 'Reactscan', url: 'https://lasna.reactscan.net' }
   }
 })
 
@@ -111,9 +111,9 @@ export const LP_INSTITUTION = {
 // ── Reactscan helpers ──────────────────────────────────────────────────────
 
 export function reactscanRscUrl(contractAddress: string): string {
-  return `https://reactscan.net/rsc/${contractAddress}`
+  return `https://lasna.reactscan.net/rsc/${contractAddress}`
 }
 
 export function reactscanTxUrl(txHash: string): string {
-  return `https://reactscan.net/tx/${txHash}`
+  return `https://lasna.reactscan.net/tx/${txHash}`
 }
