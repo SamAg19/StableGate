@@ -3,6 +3,7 @@
 **/node_modules
 /out
 
-.env 
+.env
 broadcast/
+deployments.json
 *.md

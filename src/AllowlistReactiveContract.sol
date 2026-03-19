@@ -77,13 +77,13 @@ contract AllowlistReactiveContract is AbstractReactive {
 
         if (!vm) {
             // Subscription 1: All Transfer events on MembershipNFT (mint + burn + transfer).
-            SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+            service.subscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
             // Subscription 2: TierUpdated events on MembershipNFT.
-            SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+            service.subscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
             // Subscription 3: ExpirySet events on MembershipNFT.
-            SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+            service.subscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
             // Subscription 4: Transfer events on LPMembershipNFT (same topic, different contract).
-            SERVICE_ADDR.subscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+            service.subscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
         }
     }
 
@@ -211,17 +211,17 @@ contract AllowlistReactiveContract is AbstractReactive {
 
     /// @notice Pause monitoring by unsubscribing from all Base events.
     function pause() external rnOnly {
-        SERVICE_ADDR.unsubscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
-        SERVICE_ADDR.unsubscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
-        SERVICE_ADDR.unsubscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
-        SERVICE_ADDR.unsubscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        service.unsubscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        service.unsubscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        service.unsubscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        service.unsubscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
     }
 
     /// @notice Resume monitoring by re-subscribing to all Base events.
     function resume() external rnOnly {
-        SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
-        SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
-        SERVICE_ADDR.subscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
-        SERVICE_ADDR.subscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        service.subscribe(BASE_CHAIN_ID, membershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        service.subscribe(BASE_CHAIN_ID, membershipNFT, TIER_UPDATED_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        service.subscribe(BASE_CHAIN_ID, membershipNFT, EXPIRY_SET_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        service.subscribe(BASE_CHAIN_ID, lpMembershipNFT, TRANSFER_EVENT_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
     }
 }
