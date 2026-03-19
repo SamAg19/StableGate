@@ -30,9 +30,9 @@ contract DeployReactive is Script {
 
         vm.startBroadcast();
 
-        // Deploy with 0.1 lREACT to cover subscription costs.
-        // The constructor calls SERVICE_ADDR.subscribe() on Reactive Network (not in ReactVM).
-        AllowlistReactiveContract rsc = new AllowlistReactiveContract{value: 0.1 ether}(
+        // Deploy with 1 lREACT to cover 4 subscription costs + callback gas.
+        // The constructor calls SERVICE_ADDR.subscribe() 4 times on Reactive Network.
+        AllowlistReactiveContract rsc = new AllowlistReactiveContract{value: 1 ether}(
             membershipNFT,
             lpMembershipNFT,
             hookContract
