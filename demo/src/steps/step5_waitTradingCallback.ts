@@ -7,7 +7,7 @@ import HookABI from '../../abis/PermissionedCSMMHook.json' assert { type: 'json'
 
 export async function waitForTradingCallback(tier: TierKey) {
   const inst = getInstitution(tier)
-  step(2, `Waiting for Reactive Network callbacks (${inst.tierName} tier) — Unichain Sepolia`)
+  step(5, `Waiting for Reactive Network callbacks (${inst.tierName} tier) — Unichain Sepolia`)
 
   info('AllowlistReactiveContract on Reactive Lasna detected:')
   info('  Transfer(0x0 -> institution)  ->  addToAllowlistReactive()')

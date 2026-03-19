@@ -6,7 +6,7 @@ import MembershipNFTABI from '../../abis/MembershipNFT.json' assert { type: 'jso
 
 export async function mintTradingCredential(tier: TierKey) {
   const inst = getInstitution(tier)
-  step(1, `Minting Trading Credential (MembershipNFT, ${inst.tierName} tier) — Base Sepolia`)
+  step(4, `Minting Trading Credential (MembershipNFT, ${inst.tierName} tier) — Base Sepolia`)
 
   const wasMember = await basePublic.readContract({
     address: CONTRACTS.base.membershipNFT,

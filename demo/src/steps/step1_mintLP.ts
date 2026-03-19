@@ -6,7 +6,7 @@ import LPMembershipNFTABI from '../../abis/LPMembershipNFT.json' assert { type: 
 
 export async function mintLPCredential(tier: TierKey) {
   const inst = getInstitution(tier)
-  step(4, `Minting LP Credential (LPMembershipNFT) for ${inst.tierName} institution — Base Sepolia`)
+  step(1, `Minting LP Credential (LPMembershipNFT) for ${inst.tierName} institution — Base Sepolia`)
 
   stateTable('State before LP mint', [
     ['Chain',        'Base Sepolia (84532)'],

@@ -10,7 +10,7 @@ const LP_AMOUNT = 50_000n * 10n ** 6n // 50,000 each token
 export async function addLiquidity(tier: TierKey) {
   const inst   = getInstitution(tier)
   const client = getInstitutionClient(tier)
-  step(6, `Adding liquidity to StableGate pool (${inst.tierName} institution) — Unichain Sepolia`)
+  step(3, `Adding liquidity to StableGate pool (${inst.tierName} institution) — Unichain Sepolia`)
 
   const [r0Before, r1Before] = await readReserves()
   stateTable('Pool reserves before', [

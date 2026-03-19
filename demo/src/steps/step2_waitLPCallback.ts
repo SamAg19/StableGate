@@ -7,7 +7,7 @@ import HookABI from '../../abis/PermissionedCSMMHook.json' assert { type: 'json'
 
 export async function waitForLPCallback(tier: TierKey) {
   const inst = getInstitution(tier)
-  step(5, 'Waiting for LP RSC callback — Unichain Sepolia')
+  step(2, 'Waiting for LP RSC callback — Unichain Sepolia')
 
   info('AllowlistReactiveContract detected Transfer from LPMembershipNFT:')
   info('  log._contract == LPMembershipNFT -> addToLPWhitelist(rvm_id, institution)')

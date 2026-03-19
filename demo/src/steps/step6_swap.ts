@@ -14,7 +14,7 @@ const FEE_BPS: Record<number, string> = { 0: '3 bps (Bronze)', 1: '1 bps (Silver
 export async function executeSwap(tier: TierKey) {
   const inst   = getInstitution(tier)
   const client = getInstitutionClient(tier)
-  step(3, `Executing institutional swap — 10,000 USDC -> USDT0 (${inst.tierName} tier, ${FEE_BPS[inst.tier]})`)
+  step(6, `Executing institutional swap — 10,000 USDC -> USDT0 (${inst.tierName} tier, ${FEE_BPS[inst.tier]})`)
 
   const [usdcBefore, usdt0Before] = await readBalances(inst.address)
   stateTable('Balances before swap', [
